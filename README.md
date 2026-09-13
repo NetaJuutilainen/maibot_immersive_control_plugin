@@ -87,6 +87,14 @@ python tests/verify.py
 覆盖组件声明、manifest/配置校验、命令正则、状态机全路径（冷却/并发/到期/退出/持久化）、
 钩子端到端与自动曲线 / 阈值 / 顶点效果触发等 128 项检查。
 
+## 数据与隐私
+
+- 会话状态（会话 ID、触发者 user_id、敏感度设置与各类计时信息）只保存在插件本地
+  data 目录的 `state.json`，仅用于 MaiBot 重启后恢复状态，**不会上传到任何服务器**；
+  卸载插件或删除该文件即全部清除；
+- 插件自身没有任何网络请求；发送到群里的内容仅限配置中的状态回执与提示文本，
+  提示词注入只进入麦麦自己的回复生成流程。
+
 ## 致谢与许可
 
 - 原版：[muyouzhi6/astrbot_plugin_immersive_control](https://github.com/muyouzhi6/astrbot_plugin_immersive_control)（MIT）
