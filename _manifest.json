@@ -1,0 +1,20 @@
+{
+  "manifest_version": 2,
+  "id": "github.netajuutilainen.immersive-control",
+  "version": "1.0.0",
+  "name": "麦麦我真得控制你了",
+  "description": "移植自 AstrBot astrbot_plugin_immersive_control：关键词触发后进入\"被遥控\"状态，麦麦在后续回复中自然融入害羞、结巴的沉浸式反应，持续可配置时长后自动结束；支持冷却、并发上限、管理员命令、六档敏感度、自动变化节奏、阈值主动表达、顶点效果与状态持久化。",
+  "author": { "name": "NetaJuutilainen", "url": "https://github.com/NetaJuutilainen" },
+  "license": "MIT",
+  "urls": { "repository": "https://github.com/NetaJuutilainen/maibot_immersive_control_plugin" },
+  "host_application": { "min_version": "1.0.0", "max_version": "1.99.99" },
+  "sdk": { "min_version": "2.5.0", "max_version": "2.99.99" },
+  "dependencies": [],
+  "capabilities": [
+    "send.text",
+    "maisaka.proactive.trigger",
+    "maisaka.context.append"
+  ],
+  "i18n": { "default_locale": "zh-CN" },
+  "plugin_type": "game"
+}
