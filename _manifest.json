@@ -16,5 +16,12 @@
     "maisaka.context.append"
   ],
   "i18n": { "default_locale": "zh-CN" },
-  "plugin_type": "game"
+  "plugin_type": "game",
+  "display": {
+    "icon": {
+      "type": "local",
+      "value": "./assets/icon.svg",
+      "fallback": "remote"
+    }
+  }
 }
