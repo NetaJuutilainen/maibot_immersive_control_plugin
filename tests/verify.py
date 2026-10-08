@@ -173,9 +173,9 @@ async def main() -> None:
     check("send.text 已声明", "send.text" in caps, str(caps))
     check("maisaka 能力已声明",
           "maisaka.proactive.trigger" in caps and "maisaka.context.append" in caps, str(caps))
-    check("host 区间下限 1.3.0 / 上限 1.99.99",
+    check("host 区间下限 1.3.0 / 上限 114.514.810",
           manifest["host_application"]["min_version"] == "1.3.0"
-          and manifest["host_application"]["max_version"] == "1.99.99")
+          and manifest["host_application"]["max_version"] == "114.514.810")
 
     print("== 3. 配置模型 ==")
     cfg = plugin.ImmersiveControlConfig()
