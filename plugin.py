@@ -272,17 +272,12 @@ class ImmersiveControlPlugin(MaiBotPlugin):
         s.proactive_fired = True
         self._store._changed()
         p = self.config.prompt
-        base = render_template(
+        intent = render_template(
             "（你身上的{item_name}的强度已经到了{sensitivity}/100，害羞慌乱快藏不住了，"
             "忍不住要主动吐槽求饶……）",
             p.item_name,
             self._effective_sensitivity(session_id),
         )
-        marker = str(p.visible_marker or "").strip()
-        if marker:
-            intent = (f"（本条主动表达的回复最开头必须先输出「{marker}」再写内容，不要解释它。）\n{base}")
-        else:
-            intent = base
         try:
             await self.ctx.maisaka.proactive.trigger(
                 session_id, intent, reason="immersive-control 敏感度阈值",
@@ -404,13 +399,6 @@ class ImmersiveControlPlugin(MaiBotPlugin):
             climax_inject = self._check_climax(session_id, effective)
             if climax_inject:
                 inject = f"{inject}\n{climax_inject}"
-            marker = str(prompt_cfg.visible_marker or "").strip()
-            if marker:
-                inject += (
-                    f"\n（本条回复的正文最开头必须先输出「{marker}」，再写正式内容。"
-                    f"这是当前被遥控状态的可视标记，目的是让对方一眼看出状态，"
-                    f"不要解释、不要省略、不要把它挪到别处。）"
-                )
         else:
             inject = render_template(
                 prompt_cfg.exit_template,

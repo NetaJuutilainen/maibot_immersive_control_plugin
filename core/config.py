@@ -185,11 +185,6 @@ class PromptSectionConfig(PluginConfigBase):
         description="退出后下一次回复注入一次的提示词",
         json_schema_extra={"rows": 4},
     )
-    visible_marker: str = Field(
-        default="(🍦🍦🍦)",
-        description="激活状态下的可视标记：要求麦麦每条回复的正文最开头先输出该标记再写内容，"
-                    "让“当前处于被遥控状态”一眼可辨（留空则不加）",
-    )
 
 
 class ImmersiveControlConfig(PluginConfigBase):
