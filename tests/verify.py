@@ -173,8 +173,8 @@ async def main() -> None:
     check("send.text 已声明", "send.text" in caps, str(caps))
     check("maisaka 能力已声明",
           "maisaka.proactive.trigger" in caps and "maisaka.context.append" in caps, str(caps))
-    check("host 区间覆盖 1.x",
-          manifest["host_application"]["min_version"] == "1.0.0"
+    check("host 区间下限 1.3.0 / 上限 1.99.99",
+          manifest["host_application"]["min_version"] == "1.3.0"
           and manifest["host_application"]["max_version"] == "1.99.99")
 
     print("== 3. 配置模型 ==")

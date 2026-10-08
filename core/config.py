@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from maibot_sdk import Field, PluginConfigBase
 
-SUPPORTED_CONFIG_VERSION = "1.0.0"
+SUPPORTED_CONFIG_VERSION = "1.0.1"
 
 # 提示词模板中的占位符（用 replace 而非 str.format，模板中出现裸花括号也不会炸）
 PLACEHOLDER_ITEM = "{item_name}"
