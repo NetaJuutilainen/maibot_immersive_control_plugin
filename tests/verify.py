@@ -321,6 +321,15 @@ async def main() -> None:
         check("进入模板占位符已渲染",
               "特殊装置" in injected and "50" in injected and "{" not in injected,
               injected)
+        check("可视标记已注入（默认 (🍦🍦🍦)）",
+              "(🍦🍦🍦)" in injected and "必须先输出" in injected, injected)
+        # 可视标记留空则不加
+        p.config.prompt.visible_marker = ""
+        r0 = await p.hook_prompt_injector(session_id="s5", extra_prompt="")
+        check("visible_marker 留空时不注入标记",
+              r0 is not None and "(🍦🍦🍦)" not in r0["modified_kwargs"]["extra_prompt"],
+              str(r0 and r0["modified_kwargs"]["extra_prompt"][:90]))
+        p.config.prompt.visible_marker = "(🍦🍦🍦)"
         # 退出注入一次
         await p.hook_keyword_driver(message=msg("结束控制", session_id="s5"))
         r1 = await p.hook_prompt_injector(session_id="s5", extra_prompt="")
