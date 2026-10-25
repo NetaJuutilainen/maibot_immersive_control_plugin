@@ -6,7 +6,8 @@
  3. 配置模型默认值（含 1.2.3 硬性要求的 plugin.config_version）；
  4. 命令正则按 MaiBot re.search 语义的行为（命中/不命中样例）；
  5. 状态机：激活/冷却/并发上限/自动到期/待退出注入一次/撤销退出/持久化往返；
- 6. 钩子端到端：关键词驱动（含静默 abort、冷却提示、非关键词旁路、无权限忽略）
+ 6. 钩子端到端：关键词驱动（含静默 abort、冷却提示、非关键词旁路、无权限忽略、
+    适配器未预填 processed_plain_text 时的 raw_message 兜底识别）
     与 replyer 模板注入（占位符替换、extra_prompt 拼接、退出仅一次）。
 
 用法：python tests/verify.py
@@ -173,9 +174,22 @@ async def main() -> None:
     check("send.text 已声明", "send.text" in caps, str(caps))
     check("maisaka 能力已声明",
           "maisaka.proactive.trigger" in caps and "maisaka.context.append" in caps, str(caps))
-    check("host 区间下限 1.3.0 / 上限 114.514.810",
+    check("host 区间 1.3.0~1.3.99 / sdk 区间 2.5.0~2.16.99（市场合规）",
           manifest["host_application"]["min_version"] == "1.3.0"
-          and manifest["host_application"]["max_version"] == "114.514.810")
+          and manifest["host_application"]["max_version"] == "1.3.99"
+          and manifest["sdk"]["min_version"] == "2.5.0"
+          and manifest["sdk"]["max_version"] == "2.16.99")
+
+    def _seg99(v):
+        parts = str(v).split(".")
+        return "99" in parts[:2] or "999" in parts[:2]
+
+    check("版本前两段无 99/999（市场校验禁令）",
+          not any(_seg99(v) for v in [manifest["version"],
+                                      manifest["host_application"]["min_version"],
+                                      manifest["host_application"]["max_version"],
+                                      manifest["sdk"]["min_version"],
+                                      manifest["sdk"]["max_version"]]))
 
     print("== 3. 配置模型 ==")
     cfg = plugin.ImmersiveControlConfig()
@@ -307,6 +321,33 @@ async def main() -> None:
         p._store.clear()
         r = await p.hook_keyword_driver(message=msg("控制", notify=True))
         check("通知消息旁路", r is None, str(r))
+
+        # 适配器未预填 processed_plain_text：从 raw_message 消息段兜底拼文本
+        check("_text_from_raw 拼接 at+text",
+              plugin._text_from_raw([
+                  {"type": "at", "data": {"target_user_nickname": "麦麦"}},
+                  {"type": "text", "data": " 控制"},
+              ]) == "@麦麦 控制")
+        check("_text_from_raw 忽略畸形段与无名 at",
+              plugin._text_from_raw([
+                  "junk", {"type": "at", "data": {}}, {"type": "text", "data": "td"},
+              ]) == "@td")
+        m = msg("", session_id="s7", raw_message=[{"type": "text", "data": "控制"}])
+        del m["processed_plain_text"]
+        r = await p.hook_keyword_driver(message=m)
+        check("无 processed_plain_text 时兜底识别进入关键词",
+              isinstance(r, dict) and r.get("action") == "abort", str(r))
+        m = msg("", session_id="s8", raw_message=[{"type": "text", "data": "今天天气不错"}])
+        del m["processed_plain_text"]
+        r = await p.hook_keyword_driver(message=m)
+        check("兜底路径非关键词仍旁路", r is None, str(r))
+        m = msg("", session_id="s10", group_id="g1", is_at=True,
+                raw_message=[{"type": "at", "data": {"target_user_cardname": "麦麦"}},
+                             {"type": "text", "data": " 控制"}])
+        del m["processed_plain_text"]
+        r = await p.hook_keyword_driver(message=m)
+        check("群聊 @+关键词（兜底文本）仍激活",
+              isinstance(r, dict) and r.get("action") == "abort", str(r))
 
         # replyer 注入
         r = await p.hook_prompt_injector(session_id="sx", extra_prompt="")

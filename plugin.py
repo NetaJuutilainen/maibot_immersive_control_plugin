@@ -81,6 +81,32 @@ def _norm_text_strip_at(raw: Any) -> str:
     return text
 
 
+def _text_from_raw(raw: Any) -> str:
+    """processed_plain_text 缺失时从 raw_message 消息段拼文本（仅用于关键词匹配）。
+
+    宿主在 before_process 钩子之后才生成 processed_plain_text，该字段能否读到
+    取决于适配器是否预填；拼法与 NapCat 系适配器一致（text 直取、at 渲染为 @昵称）。"""
+    parts: list[str] = []
+    for seg in raw or []:
+        if not isinstance(seg, dict):
+            continue
+        stype = str(seg.get("type") or "")
+        data = seg.get("data")
+        if stype == "text":
+            parts.append(data if isinstance(data, str) else str((data or {}).get("text") or ""))
+        elif stype == "at":
+            name = ""
+            if isinstance(data, dict):
+                name = str(
+                    data.get("target_user_cardname")
+                    or data.get("target_user_nickname")
+                    or data.get("target_user_id")
+                    or ""
+                ).strip()
+            parts.append(f"@{name}" if name else "@")
+    return "".join(parts).strip()
+
+
 def _keyword_candidates(raw: Any) -> set[str]:
     """@消息既可能是"@麦麦 控制"也可能是裸"控制"（私聊），返回两个候选。"""
     candidates = {_norm_text(raw), _norm_text_strip_at(raw)}
@@ -316,14 +342,17 @@ class ImmersiveControlPlugin(MaiBotPlugin):
         if cfg.require_at and _is_group_message(message) and not _has_at(message):
             return None
 
-        text = _norm_text(message.get("processed_plain_text"))
+        raw_text = message.get("processed_plain_text")
+        if not isinstance(raw_text, str) or not raw_text.strip():
+            raw_text = _text_from_raw(message.get("raw_message"))
+        text = _norm_text(raw_text)
         if not text:
             return None
 
         enter_words = {_norm_text(w) for w in (cfg.enter_keywords or []) if str(w).strip()}
         exit_words = {_norm_text(w) for w in (cfg.exit_keywords or []) if str(w).strip()}
 
-        candidates = _keyword_candidates(message.get("processed_plain_text"))
+        candidates = _keyword_candidates(raw_text)
         if not candidates & (enter_words | exit_words):
             return None  # 非关键词消息完全旁路，零开销
         hit_enter = bool(candidates & enter_words)
