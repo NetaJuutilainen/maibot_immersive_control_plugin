@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from maibot_sdk import Field, PluginConfigBase
 
-SUPPORTED_CONFIG_VERSION = "1.0.2"
+SUPPORTED_CONFIG_VERSION = "1.1.0"
 
 # 提示词模板中的占位符（用 replace 而非 str.format，模板中出现裸花括号也不会炸）
 PLACEHOLDER_ITEM = "{item_name}"
@@ -187,12 +187,167 @@ class PromptSectionConfig(PluginConfigBase):
     )
 
 
+class LinkageSectionConfig(PluginConfigBase):
+    """与「麦麦身体」插件的联动（全部默认关：默认行为与未加联动时完全一致）。"""
+
+    __ui_label__ = "身体联动"
+    __ui_icon__ = "monitor_heart"
+    __ui_order__ = 3
+
+    enabled: bool = Field(
+        default=False,
+        description="联动总开关（关闭时一个调用都不发，行为与未加联动时完全一致）",
+    )
+    state_ttl_seconds: int = Field(
+        default=60, ge=10, le=3600,
+        description="get_state 体征快照的缓存秒数（下限 10，防止过频 RPC）",
+    )
+    call_timeout_seconds: int = Field(
+        default=3, ge=1, le=30,
+        description="单次跨插件调用的超时上界（秒）：防止 body 假死阻塞回复",
+    )
+    body_plugin_id: str = Field(
+        default="",
+        description="身体插件 ID 覆盖（留空 = 默认 maibot-body-emulator）",
+    )
+    inject_body_text: bool = Field(
+        default=True,
+        description="遥控激活期间，把身体状态文案追加进注入提示词",
+    )
+    body_tired_text: str = Field(
+        default="你此刻精力见底，浑身发软",
+        description="精力过低（<30）时的身体文案（留空禁用该条，上限 40 字）",
+        json_schema_extra={"rows": 2},
+    )
+    body_hungry_text: str = Field(
+        default="你的胃在咕咕抗议，饿得发慌",
+        description="饥饿（>70）时的身体文案（留空禁用该条，上限 40 字）",
+        json_schema_extra={"rows": 2},
+    )
+    body_sick_text: str = Field(
+        default="你身体不舒服，脸颊发烫",
+        description="健康过低（<40）时的身体文案（留空禁用该条，上限 40 字）",
+        json_schema_extra={"rows": 2},
+    )
+    body_tense_text: str = Field(
+        default="心跳得飞快，一阵阵发热，慌乱有点压不住",
+        description="压力 ≥55 时的身体文案（留空禁用该条，上限 40 字）",
+        json_schema_extra={"rows": 2},
+    )
+    body_breakdown_text: str = Field(
+        default="慌乱一阵阵涌上来，说话都断断续续",
+        description="压力 ≥70 时的身体文案（替代上一档，上限 40 字）",
+        json_schema_extra={"rows": 2},
+    )
+    body_blank_text: str = Field(
+        default="大脑一片空白，彻底乱了阵脚，怎么都缓不过来",
+        description="压力 ≥90 时的身体文案（替代上一档，上限 40 字）",
+        json_schema_extra={"rows": 2},
+    )
+    body_sleep_text: str = Field(
+        default="你现在睡意沉沉，意识半浮半沉",
+        description="麦麦正在仿真睡眠时的身体文案（留空禁用该条，上限 40 字）",
+        json_schema_extra={"rows": 2},
+    )
+    sensitivity_boost: bool = Field(
+        default=False,
+        description="身体脆弱时给敏感度表现加成（仅注入档位与 /强度 显示用，机制判定永不加成）",
+    )
+    boost_energy_below: int = Field(
+        default=30, ge=0, le=100,
+        description="精力低于该值触发 A② 加成",
+    )
+    boost_delta: int = Field(
+        default=10, ge=0, le=20,
+        description="A② 加成幅度（0-20，整数防小数档位）",
+    )
+    write_stress: bool = Field(
+        default=False,
+        description="遥控写回身体压力：激活期间压力向「强度目标」追踪（强度降则自然回落；睡着时不写）",
+    )
+    stress_target_base: float = Field(
+        default=15.0, ge=0.0, le=100.0,
+        description="压力目标基线（强度→0 时的目标值）",
+    )
+    stress_target_range: float = Field(
+        default=75.0, ge=0.0, le=100.0,
+        description="强度 120 时的目标增量（目标 = 基线 + 该值 × 强度/120；120 强度 ≈ 90 濒临崩溃）",
+    )
+    stress_approach_gain: float = Field(
+        default=0.35, ge=0.05, le=1.0,
+        description="每次滴灌向目标靠近的比例（单次写入经 body ±20 夹取）",
+    )
+    stress_max_step: float = Field(
+        default=6.0, ge=0.0, le=20.0,
+        description="单个 tick 的最大步长（点）：压住早期跳变，让压力逐级攀升"
+                    "（30 秒/tick 时 6 点 ≈ 12 点/分钟，20→90 约 6 分钟；0=不限制）",
+    )
+    wake_meter_factor: float = Field(
+        default=0.6, ge=0.0, le=1.0,
+        description="觉醒值随压力步长累积的比例（0.6 → 觉醒值涨得比压力慢，浅睡 60 约需 4-5 分钟）",
+    )
+    release_on_climax_full: float = Field(
+        default=-15.0, ge=-20.0, le=20.0,
+        description="顶点额度用尽（count 达上限）后的泄压量（每次激活至多一次；0=不泄）",
+    )
+    release_on_stop: float = Field(
+        default=-15.0, ge=-20.0, le=20.0,
+        description="玩具停下（退出关键词）时的泄压量；自然超时结束不泄压，压力顶在原地自然回落",
+    )
+    auto_cooldown: bool = Field(
+        default=True,
+        description="无激活会话时主动冷却：压力高于回落底线时，定时器按下方速率写回，让回落肉眼可见"
+                    "（每 30 秒一次轻量写入，无 LLM、无额外查询）",
+    )
+    cooldown_rate_per_minute: float = Field(
+        default=3.0, ge=0.0, le=10.0,
+        description="主动冷却速率（压力点/分钟）：90→30 约 20 分钟；引擎自身慢衰减仍叠加",
+    )
+    cooldown_floor: float = Field(
+        default=25.0, ge=0.0, le=100.0,
+        description="主动冷却的下限（降到该值即停，交还给身体自身稳态；引擎自然稳态约 30，建议 25-30）",
+    )
+    sleep_wake_threshold: float = Field(
+        default=60.0, ge=0.0, le=100.0,
+        description="觉醒值唤醒阈值（0=关闭睡眠场景）：睡着时压力滴灌照常积累并同步攒觉醒值，"
+                    "自然醒来瞬间觉醒值 ≥ 阈值则触发余韵引爆 + 记账注入",
+    )
+    tick_interval_seconds: int = Field(
+        default=30, ge=10, le=600,
+        description="后台滴灌周期（秒）：激活会话的压力按「强度×时间」累积，不依赖麦麦回话"
+                    "（睡着/夜间也照常累积），并顺带惰性结算超时",
+    )
+    wake_threshold_deep: float = Field(
+        default=100.0, ge=40.0, le=100.0,
+        description="深睡（deep_sleep）的觉醒引爆阈值：深睡要攒满整条觉醒值才醒（难醒）",
+    )
+    wake_threshold_light: float = Field(
+        default=60.0, ge=20.0, le=100.0,
+        description="入睡期/浅睡（falling_asleep/light_sleep）的觉醒引爆阈值（易醒）",
+    )
+    mai_life_plugin_id: str = Field(
+        default="",
+        description="麦生活插件 ID 覆盖（留空 = 默认 maibot-community.mai-life，读睡眠阶段用）",
+    )
+    body_wake_note_text: str = Field(
+        default="（你睡着的时候，好像经历了些什么……记忆模糊，但心跳的余韵还隐约记得。）",
+        description="醒来后的一次性记账文案——觉醒值达到睡眠阈值时注入（留空禁用）",
+        json_schema_extra={"rows": 3},
+    )
+    body_wake_note_light_text: str = Field(
+        default="（醒来时有些异样的感觉，像发生了什么，又想不起来。）",
+        description="觉醒值未达睡眠阈值时的轻记账文案（留空禁用）",
+        json_schema_extra={"rows": 2},
+    )
+
+
 class ImmersiveControlConfig(PluginConfigBase):
     """插件完整配置。"""
 
     plugin: PluginSectionConfig = Field(default_factory=PluginSectionConfig)
     control: ControlSectionConfig = Field(default_factory=ControlSectionConfig)
     prompt: PromptSectionConfig = Field(default_factory=PromptSectionConfig)
+    linkage: LinkageSectionConfig = Field(default_factory=LinkageSectionConfig)
 
 
 def render_template(template: str, item_name: str, sensitivity: int, duration: int = 0) -> str:

@@ -1,0 +1,48 @@
+{
+  "schema_version": 2,
+  "required_capabilities": [
+    "custom_pages"
+  ],
+  "workspace_title": "麦麦我真得控制你了",
+  "pages": [
+    {
+      "mode": "custom",
+      "id": "linkage",
+      "title": "麦麦遥控器",
+      "description": "遥控 × 麦身体联动：觉醒值、压力 vs 预计压力、激活会话（真名），可直接改常用参数与快捷动作",
+      "icon": "settings",
+      "entry": "webui/linkage.html",
+      "layout": "document",
+      "queries": {
+        "linkage": {
+          "api": "webui_linkage",
+          "version": "1"
+        }
+      },
+      "actions": {
+        "config": {
+          "api": "webui_linkage_config",
+          "version": "1",
+          "parameters": {
+            "patch": {
+              "type": "string",
+              "required": true,
+              "max_length": 20000
+            }
+          }
+        },
+        "op": {
+          "api": "webui_linkage_action",
+          "version": "1",
+          "parameters": {
+            "op": {
+              "type": "string",
+              "required": true,
+              "max_length": 32
+            }
+          }
+        }
+      }
+    }
+  ]
+}

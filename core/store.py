@@ -49,6 +49,8 @@ class Session:
     proactive_fired: bool = False  # 本次激活期间阈值自动触发是否已用过
     climax_ts: float = 0.0         # 持续越限开始时间（0 = 未在计时）
     climax_count: int = 0          # 本次激活期间顶点效果已触发次数
+    display_name: str = ""         # 会话显示名（群名 / 用户昵称，WebUI 展示用）
+    is_group: bool = False         # 是否群聊（WebUI 来源列展示用）
 
     def to_dict(self) -> dict:
         return {
@@ -63,6 +65,8 @@ class Session:
             "proactive_fired": self.proactive_fired,
             "climax_ts": self.climax_ts,
             "climax_count": self.climax_count,
+            "display_name": self.display_name,
+            "is_group": self.is_group,
         }
 
     @classmethod
@@ -79,6 +83,8 @@ class Session:
             proactive_fired=bool(data.get("proactive_fired", False)),
             climax_ts=float(data.get("climax_ts", 0.0) or 0.0),
             climax_count=int(data.get("climax_count", 0) or 0),
+            display_name=str(data.get("display_name", "") or ""),
+            is_group=bool(data.get("is_group", False)),
         )
 
 

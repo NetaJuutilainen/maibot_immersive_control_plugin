@@ -13,14 +13,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
+import json
 import random
 import sys
 import time
 from pathlib import Path
 from typing import Any, ClassVar
 
-from maibot_sdk import Command, HookHandler, MaiBotPlugin
+from maibot_sdk import API, Command, HookHandler, MaiBotPlugin
 from maibot_sdk.types import ErrorPolicy, HookMode, HookOrder
 
 _PLUGIN_DIR = Path(__file__).resolve().parent
@@ -42,6 +44,7 @@ def _load_core_module(stem: str) -> Any:
 
 _config_mod = _load_core_module("config")
 _store_mod = _load_core_module("store")
+_link_mod = _load_core_module("link")
 
 SUPPORTED_CONFIG_VERSION = _config_mod.SUPPORTED_CONFIG_VERSION
 ImmersiveControlConfig = _config_mod.ImmersiveControlConfig
@@ -51,11 +54,92 @@ auto_sensitivity_value = _store_mod.auto_sensitivity_value
 ACTIVATED = _store_mod.ACTIVATED
 COOLDOWN = _store_mod.COOLDOWN
 LIMIT = _store_mod.LIMIT
+BodyLink = _link_mod.BodyLink
 
 INTENSITY_MIN, INTENSITY_MAX = 0, 120  # 指令可设置的敏感度范围（越界直接拒绝）
 
-# 顶点效果 emoji 标记的附加指令（{e} 为配置的 emoji）
+# A① 身体文案的触发阈值（读 get_state 字段；文案内容与开关在 [linkage] 配置）
+BODY_TIRED_BELOW = 30.0     # energy 低于该值 → 精力见底
+BODY_HUNGRY_ABOVE = 70.0    # hunger 高于该值 → 饿（body 的 hunger 高=饿）
+BODY_SICK_BELOW = 40.0      # health 低于该值 → 不舒服
+BODY_TENSE_ABOVE = 55.0     # stress 高于该值 → 紧绷档文案
+BODY_BREAKDOWN_ABOVE = 70.0  # stress 高于该值 → 濒临崩溃档文案（叠加）
+BODY_BLANK_ABOVE = 90.0     # stress 高于该值 → 大脑空白档文案（叠加）
+BODY_TEXT_CAP = 40          # 每条身体文案上限（字），防多条命中叠加超出 token 预算
+
+# 顶点 emoji 标记的附加指令（{e} 为配置的 emoji）
 _EMOJI_HINT = "（此条回复的结尾不经意地带上{e}，不要解释原因。）"
+
+# 麦生活 sleep_phase → 睡眠深度（与 body 的映射一致，WebUI 展示用）
+_SLEEP_DEPTH = {
+    "awake": 0.0,
+    "woken": 0.0,
+    "falling_asleep": 0.35,
+    "light_sleep": 0.65,
+    "deep_sleep": 1.0,
+}
+
+# WebUI 快捷配置：联动段白名单（键名不含段前缀时默认落在 [linkage]）
+_LINKAGE_WHITELIST: dict[str, tuple[str, Any, Any]] = {
+    "enabled": ("bool", None, None),
+    "write_stress": ("bool", None, None),
+    "inject_body_text": ("bool", None, None),
+    "sensitivity_boost": ("bool", None, None),
+    "tick_interval_seconds": ("int", 10, 600),
+    "state_ttl_seconds": ("int", 10, 3600),
+    "call_timeout_seconds": ("int", 1, 30),
+    "stress_target_base": ("float", 0.0, 100.0),
+    "stress_target_range": ("float", 0.0, 100.0),
+    "stress_approach_gain": ("float", 0.05, 1.0),
+    "stress_max_step": ("float", 0.0, 20.0),
+    "wake_meter_factor": ("float", 0.0, 1.0),
+    "wake_threshold_light": ("float", 20.0, 100.0),
+    "wake_threshold_deep": ("float", 40.0, 100.0),
+    "sleep_wake_threshold": ("float", 0.0, 100.0),
+    "release_on_climax_full": ("float", -20.0, 20.0),
+    "release_on_stop": ("float", -20.0, 20.0),
+    "auto_cooldown": ("bool", None, None),
+    "cooldown_rate_per_minute": ("float", 0.0, 10.0),
+    "cooldown_floor": ("float", 0.0, 100.0),
+    "body_wake_note_text": ("str", None, None),
+    "body_wake_note_light_text": ("str", None, None),
+}
+
+# 插件本体（非联动）的可快捷配置字段：control 段与 prompt 段
+# 注：admin_only_mode / admin_ids 不放进来（避免把自己锁在门外，请在插件设置面板调整）
+_SECTION_WHITELISTS: dict[str, dict[str, tuple[str, Any, Any]]] = {
+    "control": {
+        "require_at": ("bool", None, None),
+        "enter_keywords": ("list", None, None),
+        "exit_keywords": ("list", None, None),
+        "state_duration": ("int", 10, 3600),
+        "cooldown_seconds": ("int", 0, 3600),
+        "max_concurrent": ("int", 1, 9999),
+        "exit_pending_ttl": ("int", 5, 3600),
+        "react_on_trigger": ("bool", None, None),
+        "proactive_threshold": ("int", 0, 120),
+        "auto_speed_per_minute": ("int", 1, 120),
+        "climax_threshold": ("int", 0, 120),
+        "climax_hold_seconds": ("int", 1, 600),
+        "climax_max_per_activation": ("int", 1, 99),
+        "stealth_mode": ("bool", None, None),
+        "stealth_phrases": ("list", None, None),
+    },
+    "prompt": {
+        "item_name": ("str", None, None),
+        "sensitivity": ("int", 0, 100),
+        "tier_0_20": ("multiline", None, None),
+        "tier_20_40": ("multiline", None, None),
+        "tier_40_60": ("multiline", None, None),
+        "tier_60_80": ("multiline", None, None),
+        "tier_80_100": ("multiline", None, None),
+        "tier_100_120": ("multiline", None, None),
+        "enter_template": ("multiline", None, None),
+        "climax_emoji": ("str", None, None),
+        "climax_template": ("multiline", None, None),
+        "exit_template": ("multiline", None, None),
+    },
+}
 
 _STATE_FILE = "state.json"
 
@@ -146,6 +230,18 @@ class ImmersiveControlPlugin(MaiBotPlugin):
     def __init__(self) -> None:
         super().__init__()
         self._store = SessionStore()
+        # 身体联动簿记（B 方向防重复写入的内存集合；插件重载丢失可接受，见设计稿 §八）
+        self._active_sessions: set[str] = set()
+        self._body_tick: dict[str, float] = {}   # 每会话上次压力追踪时刻
+        self._body_released: set[str] = set()    # 每会话已泄压标记（顶点额度用尽后至多一次）
+        self._body_wake_meter = 0.0              # 觉醒值（睡着时积累，醒来瞬间结算）
+        self._body_last_sleeping: bool | None = None  # 自然醒翻转检测
+        self._body_last_phase: str | None = None      # 最近一次已知的睡眠阶段
+        self._body_deep_reached = False          # 本次睡眠是否进入过深睡（决定引爆阈值档）
+        self._body_wake_note_pending = False     # 醒后记账待注入
+        self._body_wake_note_light = False       # 醒后记账档位：False=完整（过阈值）/True=轻度（未达）
+        self._ticker_task = None                 # 后台滴灌定时器任务
+        self._body_ref = None
 
     # ---- 生命周期 ----
 
@@ -153,12 +249,21 @@ class ImmersiveControlPlugin(MaiBotPlugin):
         state_path = self.ctx.paths.data_dir / _STATE_FILE
         self._store.on_changed = lambda: self._store.save(state_path)
         self._store.load(state_path)
+        # 重载恢复：把持久化里仍激活的会话补回内存簿记（否则会误判"无会话"而启动冷却）
+        self._active_sessions = {sid for sid, s in self._store.sessions.items() if s.active}
+        for sid in self._active_sessions:
+            self._body_tick.setdefault(sid, time.time())
+        # 后台滴灌定时器：激活会话的压力按「强度×时间」累积，不依赖麦麦回话
+        self._ticker_task = asyncio.get_running_loop().create_task(self._body_ticker())
         self.ctx.logger.info(
             "沉浸式遥控已加载：持久化状态 %d 条（%s）",
             len(self._store.sessions), state_path,
         )
 
     async def on_unload(self) -> None:
+        task = getattr(self, "_ticker_task", None)
+        if task is not None:
+            task.cancel()
         state_path = self.ctx.paths.data_dir / _STATE_FILE
         self._store.save(state_path)
         self.ctx.logger.info("沉浸式遥控已卸载，状态已保存")
@@ -196,6 +301,290 @@ class ImmersiveControlPlugin(MaiBotPlugin):
 
     def _control(self):
         return self.config.control
+
+    # ---- 身体联动（[linkage] 全部默认关：关闭时以下方法零 RPC、零路径） ----
+
+    def _body(self):
+        """联动客户端（懒建；配置节每次经 getter 现取，热更新安全）。"""
+        if self._body_ref is None:
+            self._body_ref = BodyLink(lambda: self.config.linkage, self.ctx)
+        return self._body_ref
+
+    async def _body_state(self) -> dict[str, Any] | None:
+        """读身体状态（缓存内）。任何失败静默返回 None，绝不抛（守卫 2/3/4/5/7）。"""
+        try:
+            return await self._body().get_state()
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.logger.debug("身体联动读取异常（已降级）：%r", exc)
+            return None
+
+    async def _body_text_for(self) -> str:
+        """A①：按缓存身体状态拼一段文案（关闭/失败/无命中 → 空串，注入与原版一致）。"""
+        link_cfg = self.config.linkage
+        if not link_cfg.enabled or not link_cfg.inject_body_text:
+            return ""
+        state = await self._body_state()
+        if not isinstance(state, dict):
+            return ""
+
+        def add(condition: bool, text: str) -> None:
+            text = str(text or "").strip()[:BODY_TEXT_CAP]
+            if condition and text:
+                parts.append(text)
+
+        parts: list[str] = []
+        add(bool(state.get("sleeping")), link_cfg.body_sleep_text)
+        add(float(state.get("energy", 0.0)) < BODY_TIRED_BELOW, link_cfg.body_tired_text)
+        add(float(state.get("hunger", 0.0)) > BODY_HUNGRY_ABOVE, link_cfg.body_hungry_text)
+        add(float(state.get("health", 0.0)) < BODY_SICK_BELOW, link_cfg.body_sick_text)
+        # 压力分档：随滴灌爬坡换词（55 紧绷 → 70 濒临崩溃 → 90 大脑空白，高档替换低档）
+        stress_v = float(state.get("stress", 0.0))
+        if stress_v >= BODY_BLANK_ABOVE:
+            add(True, link_cfg.body_blank_text)
+        elif stress_v >= BODY_BREAKDOWN_ABOVE:
+            add(True, link_cfg.body_breakdown_text)
+        elif stress_v >= BODY_TENSE_ABOVE:
+            add(True, link_cfg.body_tense_text)
+        return "；".join(parts)
+
+    async def _body_write(self, delta: float, label: str, depression_delta: float = 0.0) -> None:
+        """B：写一次压力变化。睡眠场景关闭（阈值=0）时睡着不写；失败静默不重试。"""
+        link_cfg = self.config.linkage
+        if not link_cfg.enabled or not link_cfg.write_stress:
+            return
+        state = await self._body_state()
+        if state is None:
+            return
+        if bool(state.get("sleeping")) and float(link_cfg.sleep_wake_threshold) <= 0:
+            return  # 睡眠场景关闭：睡着不写（守卫回退到原语义）
+        try:
+            ok = await self._body().adjust_mood(float(delta), label=label,
+                                                depression_delta=float(depression_delta))
+            if ok:
+                self.ctx.logger.debug("身体写入 %+.1f/%+.2f（%s）", delta, depression_delta, label)
+            else:
+                self.ctx.logger.debug("身体写入未生效（%s）：%s", label, self._body()._last_error)
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.logger.debug("身体联动写入异常（已降级）：%r", exc)
+
+    async def _body_on_activated(self, session_id: str) -> None:
+        """B：激活事件。首次激活登记追踪锚点并重置泄压标记；重入刷新不重复登记。
+        集合先改后 await（asyncio 在 await 处让出，先改封死并发双写窗口）。"""
+        link_cfg = self.config.linkage
+        if not link_cfg.enabled or not link_cfg.write_stress:
+            return
+        if session_id in self._active_sessions:
+            return
+        self._active_sessions.add(session_id)
+        self._body_released.discard(session_id)  # 新一轮激活重新获得泄压额度
+        self._body_tick[session_id] = time.time()
+
+    async def _body_tick_stress(self, session_id: str, effective: int) -> None:
+        """B 核心：压力向「强度目标」追踪（强度降 → 自然回落；强度顶满 → 顶在高位）。
+
+        目标 = stress_target_base + stress_target_range × (当前强度/120)。
+        每次回复滴灌一次：delta = (目标 − 当前压力) × approach_gain，单次经 body ±20 夹取。
+        会话自然超时结束时不泄压——压力顶在原地，由 body 引擎的自我平衡慢慢回落。
+        """
+        link_cfg = self.config.linkage
+        if not link_cfg.enabled or not link_cfg.write_stress:
+            return
+        now = time.time()
+        last = self._body_tick.get(session_id)
+        if last is None:
+            self._body_tick[session_id] = now  # 无锚点（如重载恢复的会话）：先登记不写
+            return
+        self._body_tick[session_id] = now  # 先改簿记后 await（防并发双写）
+        state = await self._body_state()
+        if not isinstance(state, dict):
+            return
+        sleeping = bool(state.get("sleeping"))
+        threshold = float(link_cfg.sleep_wake_threshold)
+        target = float(link_cfg.stress_target_base) + float(link_cfg.stress_target_range) * (
+            max(0, effective) / 120.0)
+        current = float(state.get("stress", 0.0))
+        delta = float(link_cfg.stress_approach_gain) * (target - current)
+        delta = max(-20.0, min(20.0, delta))
+        step_cap = float(link_cfg.stress_max_step)
+        if step_cap > 0:
+            delta = max(-step_cap, min(step_cap, delta))  # 单 tick 步长上限，避免早期跳变
+        # 睡眠场景：睡着时滴灌照常（身体在睡梦中积累），觉醒值按比例积累；
+        # 引爆阈值由睡眠深度决定——深睡要攒满整条（100）才醒，入睡/浅睡半条（60）即醒
+        if sleeping and threshold > 0 and delta > 0:
+            self._body_wake_meter = min(100.0, self._body_wake_meter + delta * float(link_cfg.wake_meter_factor))
+            phase = None
+            try:
+                phase = await self._body().get_sleep_phase()
+            except Exception as exc:  # noqa: BLE001
+                self.ctx.logger.debug("睡眠阶段读取异常（已降级）：%r", exc)
+            if phase:
+                self._body_last_phase = phase
+                if phase == "deep_sleep":
+                    self._body_deep_reached = True
+        # 自然醒翻转检测：醒来瞬间按本次睡眠最深阶段结算觉醒值
+        prev = self._body_last_sleeping
+        self._body_last_sleeping = sleeping
+        if prev is True and not sleeping:
+            # 睡眠场景关闭（sleep_wake_threshold=0）→ 直接清零不记账
+            if float(link_cfg.sleep_wake_threshold) <= 0:
+                self._body_wake_meter = 0.0
+                self._body_deep_reached = False
+            else:
+                thr = (float(link_cfg.wake_threshold_deep) if self._body_deep_reached
+                       else float(link_cfg.wake_threshold_light))
+                if self._body_wake_meter >= thr:
+                    # 达标 → 余韵引爆 + 完整模糊记账
+                    self._body_wake_note_pending = bool(
+                        str(link_cfg.body_wake_note_text or "").strip())
+                    self._body_wake_note_light = False
+                    await self._body_write(20.0, label="睡梦余韵引爆")
+                elif self._body_wake_meter > 0:
+                    # 未达阈值 → 轻记账（醒来身体有异样感，不点破细节）
+                    self._body_wake_note_light = bool(
+                        str(link_cfg.body_wake_note_light_text or "").strip())
+                    self._body_wake_note_pending = self._body_wake_note_light
+                self._body_wake_meter = 0.0
+                self._body_deep_reached = False
+        if abs(delta) < 0.5:
+            return  # 已贴住目标，不值得一次 RPC
+        await self._body_write(delta, label="遥控强度追踪")
+
+    async def _body_on_climax_full(self, session_id: str) -> None:
+        """B：顶点额度用尽（count 达上限）→ 泄压一次（每次激活至多一次）。"""
+        link_cfg = self.config.linkage
+        if not link_cfg.enabled or not link_cfg.write_stress:
+            return
+        if session_id in self._body_released:
+            return
+        s = self._store.sessions.get(session_id)
+        if s is None or not s.active:
+            return
+        cap = max(1, int(self._control().climax_max_per_activation))
+        if int(getattr(s, "climax_count", 0)) < cap:
+            return
+        if float(link_cfg.release_on_climax_full):
+            self._body_released.add(session_id)  # 先改簿记后 await
+            await self._body_write(float(link_cfg.release_on_climax_full), label="顶点额度用尽泄压")
+
+    async def _body_ticker(self) -> None:
+        """后台滴灌定时器（修复：睡着/夜间麦麦不回话时压力不再累积的结构性问题）。
+
+        每 tick_interval_seconds 对各激活会话：
+        - prompt_state 惰性结算超时（修掉「无回复时超时永不结算」的挂起问题）；
+        - enter → 压力向强度目标追踪一步 + 睡眠场景觉醒值积累（深度感知）；
+        - exit → 玩具停下泄压；none → 自然结束，清理簿记不泄压。
+        循环内所有异常降级（守卫 7），永不炸任务。"""
+        while True:
+            try:
+                link_cfg = self.config.linkage
+                await asyncio.sleep(max(10, int(link_cfg.tick_interval_seconds)))
+                if not self.config.plugin.enabled or not link_cfg.enabled:
+                    continue
+                await self._body_guard(self._body_tick_all)
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:  # noqa: BLE001
+                self.ctx.logger.debug("身体滴灌定时器异常（已降级）：%r", exc)
+
+    async def _body_tick_all(self) -> None:
+        """一个 tick 内推进全部激活会话（**以 store 为准**，插件重载后也能续上）。
+
+        冷却条件也看 store 的真实激活数，避免"内存集合为空但其实有会话"时误冷却。
+        """
+        active_ids = [sid for sid, s in self._store.sessions.items()
+                      if s.active or s.exit_ts > 0]
+        self._active_sessions &= set(active_ids)   # 清理陈旧簿记（会话已被清除/结束）
+        for sid in active_ids:
+            state = self._store.prompt_state(sid, self._control())
+            await self._body_guard(lambda: self._sync_body_session(sid, state))
+            if state == "enter":
+                await self._body_guard(lambda: self._body_tick_stress(
+                    sid, self._effective_sensitivity(sid)))
+        if not active_ids:
+            await self._body_guard(self._body_cooldown_tick)
+            # 无会话时觉醒值缓慢消退（避免会话结束后停在某个值上不动）
+            if self._body_wake_meter > 0:
+                self._body_wake_meter = max(0.0, self._body_wake_meter - 2.0)
+
+    async def _body_cooldown_tick(self) -> None:
+        """无激活会话时的主动冷却：压力高于下限就按速率写回一小步。
+
+        开销：每个 tick（默认 30 秒）最多一次轻量 adjust_mood，无 LLM、无额外查询
+        （get_state 走缓存）；降到 cooldown_floor 即停，交还身体自身稳态。
+        """
+        link_cfg = self.config.linkage
+        if not link_cfg.enabled or not link_cfg.write_stress or not link_cfg.auto_cooldown:
+            return
+        rate = float(link_cfg.cooldown_rate_per_minute)
+        if rate <= 0:
+            return
+        state = await self._body_state()
+        if not isinstance(state, dict):
+            return
+        floor = float(link_cfg.cooldown_floor)
+        gap = float(state.get("stress", 0.0)) - floor
+        if gap < 0.5:
+            return  # 已到下限
+        dt_min = max(10, int(link_cfg.tick_interval_seconds)) / 60.0
+        step = min(gap, rate * dt_min)
+        if step < 0.3:
+            return
+        await self._body_write(-step, label="冷却回落")
+
+    async def _sync_body_session(self, session_id: str, state: str) -> None:
+        """B：过渡检测。enter 入集；「exit」（玩具停下）→ 泄压一次；
+        「none」（自然超时/待退出过期）→ 不泄压，压力顶在原地由引擎自然回落。"""
+        link_cfg = self.config.linkage
+        if not link_cfg.enabled or not link_cfg.write_stress:
+            return
+        if state == "enter":
+            self._active_sessions.add(session_id)
+            return
+        if session_id in self._active_sessions:
+            self._active_sessions.discard(session_id)  # 先改集合后 await
+            self._body_tick.pop(session_id, None)      # 追踪锚点一并清掉
+            if state == "exit" and float(link_cfg.release_on_stop):
+                await self._body_write(float(link_cfg.release_on_stop), label="玩具停下泄压")
+
+    async def _body_display_boost(self) -> int:
+        """A②（默认关）：身体脆弱 → 显示用加成值；仅注入档位与 /强度 显示，机制判定永不加成。"""
+        link_cfg = self.config.linkage
+        if not link_cfg.enabled or not link_cfg.sensitivity_boost:
+            return 0
+        state = await self._body_state()
+        if not isinstance(state, dict) or state.get("sleeping"):
+            return 0
+        fragile = (float(state.get("energy", 100.0)) < float(link_cfg.boost_energy_below)
+                   or float(state.get("health", 100.0)) < BODY_SICK_BELOW)
+        return int(link_cfg.boost_delta) if fragile else 0
+
+    async def _body_guard(self, action) -> None:
+        """守卫 7 兜底：联动代码整体不得向钩子抛异常（error_policy=SKIP 会连坐原版注入）。"""
+        try:
+            await action()
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.logger.debug("身体联动异常（已降级）：%r", exc)
+
+    def _capture_display_name(self, session_id: str, message: dict) -> None:
+        """激活时记录会话显示名：群聊取群名、私聊取名片/昵称（WebUI 展示用真名）。"""
+        s = self._store.sessions.get(session_id)
+        if s is None:
+            return
+        try:
+            info = message.get("message_info") or {}
+            user = info.get("user_info") or {}
+            group = info.get("group_info") or {}
+            if group.get("group_id"):
+                s.is_group = True
+                s.display_name = str(group.get("group_name") or "").strip()[:40]
+            else:
+                s.is_group = False
+                s.display_name = str(
+                    user.get("user_cardname") or user.get("user_nickname") or ""
+                ).strip()[:40]
+            self._store._changed()
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.logger.debug("显示名捕获异常（已降级）：%r", exc)
 
     def _effective_sensitivity(self, session_id: str, now: float | None = None) -> int:
         """会话实际生效的敏感度（整数）：自动模式按三角波实时计算，
@@ -249,7 +638,7 @@ class ImmersiveControlPlugin(MaiBotPlugin):
                 f"已触发 {s.climax_count}/{cfg.climax_max_per_activation} 次）")
 
     def _check_climax(self, session_id: str, effective: int, now: float | None = None) -> str:
-        """持续越限检查：敏感度保持在阈值以上达到时长 → 返回一次顶点效果注入文本。
+        """持续越限检查：敏感度保持在阈值以上达到时长 → 返回一次顶点注入文本。
         中途跌破阈值则重新计时；每次激活最多触发一次。返回空串表示本次不注入。"""
         cfg = self._control()
         threshold = int(cfg.climax_threshold)
@@ -370,6 +759,10 @@ class ImmersiveControlPlugin(MaiBotPlugin):
         if hit_enter:
             result, remaining = self._store.try_activate(session_id, cfg)
             if result == ACTIVATED:
+                # WebUI 展示用：记录会话真名（群名 / 用户昵称·名片）
+                self._capture_display_name(session_id, message)
+                # B：首次激活写压力（重入刷新不写；联动关闭时零路径）
+                await self._body_guard(lambda: self._body_on_activated(session_id))
                 await self._maybe_proactive(session_id)
                 if cfg.react_on_trigger:
                     # 不拦截：麦麦立刻回复这条消息，replyer 钩子会注入进入模板
@@ -410,24 +803,50 @@ class ImmersiveControlPlugin(MaiBotPlugin):
             return None
 
         state = self._store.prompt_state(session_id, self._control())
+        # B 簿记：过渡检测（enter 入集；exit/none 且原在集合 → 一次结束缓释）
+        await self._body_guard(lambda: self._sync_body_session(session_id, state))
         if state == "none":
             return None
 
         prompt_cfg = self.config.prompt
         effective = self._effective_sensitivity(session_id)
+        # A②（默认关）：显示用加成值仅作用于注入档位与 {sensitivity}；climax/proactive 判定仍用原值
+        try:
+            boost = await self._body_display_boost()
+        except Exception:  # noqa: BLE001 —— 守卫 7
+            boost = 0
+        effective_display = min(120, effective + boost) if boost > 0 else effective
         if state == "enter":
             inject = render_template(
                 prompt_cfg.enter_template,
                 prompt_cfg.item_name,
-                effective,
+                effective_display,
                 self._control().state_duration,
             )
-            inject = f"{inject}\n（当前强度参考：{self._tier_text(effective)}）"
+            inject = f"{inject}\n（当前强度参考：{self._tier_text(effective_display)}）"
+            # A①：身体状态文案（固定拼在档位行后、climax 注入前；关闭/失败/无命中 → 不追加）
+            body_text = await self._body_text_for()
+            if body_text:
+                inject = f"{inject}\n{body_text}"
             # 自动模式爬升越过阈值时在对话流中触发（每次激活最多一次）
             await self._maybe_proactive(session_id)
             climax_inject = self._check_climax(session_id, effective)
             if climax_inject:
                 inject = f"{inject}\n{climax_inject}"
+            # B：顶点额度用尽 → 泄压一次（判定用未加成的 effective，机制不受 A② 影响）
+            await self._body_guard(lambda: self._body_on_climax_full(session_id))
+            # B 核心：压力向「强度目标」追踪（强度降自然回落；自然超时不泄压）
+            await self._body_guard(lambda: self._body_tick_stress(session_id, effective))
+            # 睡梦余韵记账（自然醒来后的一次性注入；档位由觉醒值是否过阈值决定）
+            if self._body_wake_note_pending:
+                src = (self.config.linkage.body_wake_note_text if not self._body_wake_note_light
+                       else self.config.linkage.body_wake_note_light_text)
+                note = str(src or "").strip()
+                if note:
+                    inject = f"{inject}\n{note[:120]}"
+                self._body_wake_note_pending = False
+                self._body_wake_note_light = False
+                self.ctx.logger.debug("会话 %s 注入睡梦余韵记账", session_id)
         else:
             inject = render_template(
                 prompt_cfg.exit_template,
@@ -465,6 +884,9 @@ class ImmersiveControlPlugin(MaiBotPlugin):
             await self._send(stream_id, "权限不足：仅管理员可用。")
             return False, "权限不足", True
         n = self._store.clear()
+        self._active_sessions.clear()  # B 簿记同步：清除后重激活应重新登记追踪锚点
+        self._body_tick.clear()
+        self._body_released.clear()
         await self._send(stream_id, f"已清除 {n} 个会话的遥控状态。")
         return True, "imm_clear", True
 
@@ -483,10 +905,22 @@ class ImmersiveControlPlugin(MaiBotPlugin):
 
         if raw_value is None:  # 查询
             current = self._effective_sensitivity(stream_id)
+            # A②（默认关）：身体脆弱时显示加成值；加成 0 → 原格式（守卫 8）
+            try:
+                boost = await self._body_display_boost()
+            except Exception:  # noqa: BLE001 —— 守卫 7
+                boost = 0
+            if boost > 0:
+                shown = min(120, current + boost)
+                head = (f"当前敏感度：{shown}/120（基础 {current} + 身体加成 {boost}；"
+                        f"模式：{self._intensity_mode_text(stream_id)}）")
+            else:
+                head = f"当前敏感度：{current}/120（模式：{self._intensity_mode_text(stream_id)}）"
+                shown = current
             await self._send(
                 stream_id,
-                f"当前敏感度：{current}/120（模式：{self._intensity_mode_text(stream_id)}）\n"
-                f"档位：{self._tier_text(current)}\n"
+                f"{head}\n"
+                f"档位：{self._tier_text(shown)}\n"
                 f"持续越限：{self._climax_status_text(stream_id)}\n"
                 f"阈值自动触发：{'关闭' if cfg.proactive_threshold <= 0 else f'{cfg.proactive_threshold}/120'}\n"
                 f"用法：/强度 0~120、/强度 max(=120)、/强度 自动、/强度 全局",
@@ -557,7 +991,7 @@ class ImmersiveControlPlugin(MaiBotPlugin):
             "\n".join([
                 f"进入关键词：{'、'.join(cfg.enter_keywords)}",
                 f"退出关键词：{'、'.join(cfg.exit_keywords)}",
-                f"道具：{p.item_name}（全局敏感度 {p.sensitivity}/120，"
+                f"玩具：{p.item_name}（全局敏感度 {p.sensitivity}/120，"
                 f"本会话 {self._effective_sensitivity(stream_id)}/100，可用 /强度 修改）",
                 f"持续 {cfg.state_duration} 秒，冷却 {cfg.cooldown_seconds} 秒，"
                 f"并发上限 {cfg.max_concurrent}，退出提示词有效期 {cfg.exit_pending_ttl} 秒",
@@ -569,6 +1003,236 @@ class ImmersiveControlPlugin(MaiBotPlugin):
             ]),
         )
         return True, "imm_config", True
+
+    # ---- WebUI（P1 状态页数据；页面在 webui/linkage.html，经 window.maibot 桥调用） ----
+
+    @API(name="webui_linkage", description="联动管理页数据：激活会话/觉醒值/压力/睡眠/熔断（WebUI 专用）",
+         version="1", public=False)
+    async def webui_linkage(self, **kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        cfg = self.config.linkage
+        now = time.time()
+        sessions: list[dict[str, Any]] = []
+        for sid, s in self._store.sessions.items():
+            if not s.active and s.exit_ts <= 0:
+                continue
+            remain = 0
+            if s.active and s.exit_ts <= 0:
+                remain = max(0, int(self._control().state_duration - (now - s.started_ts)))
+            sessions.append({
+                "display_name": s.display_name or sid[-8:],
+                "is_group": bool(s.is_group),
+                "sensitivity": int(self._effective_sensitivity(sid)),
+                "remaining_seconds": remain,
+                "climax_count": int(s.climax_count),
+                "released": sid in self._body_released,
+            })
+        state = await self._body_state()
+        sleeping = bool(state.get("sleeping")) if isinstance(state, dict) else False
+        phase = ""
+        if sleeping:
+            try:
+                phase = str(await self._body().get_sleep_phase() or "")
+            except Exception:  # noqa: BLE001
+                phase = ""
+        eff = max([x["sensitivity"] for x in sessions],
+                  default=int(self.config.prompt.sensitivity))
+        target = float(cfg.stress_target_base) + float(cfg.stress_target_range) * (eff / 120.0)
+        body_ref = self._body()
+        return {
+            "ok": True,
+            "sessions": sessions,
+            "wake_meter": round(float(self._body_wake_meter), 1),
+            "wake_threshold_light": float(cfg.wake_threshold_light),
+            "wake_threshold_deep": float(cfg.wake_threshold_deep),
+            "sleeping": sleeping,
+            "sleep_phase": phase,
+            "sleep_depth": round(_SLEEP_DEPTH.get(phase, 0.0), 2),
+            "stress": (round(float(state.get("stress", 0.0)), 1)
+                       if isinstance(state, dict) else None),
+            "stress_target": round(target, 1),
+            "drip_interval": int(cfg.tick_interval_seconds),
+            "breaker": {
+                "fail_count": int(getattr(body_ref, "_fail_count", 0)),
+                "open_until": float(getattr(body_ref, "_open_until", 0.0)),
+            },
+            "enabled": bool(cfg.enabled),
+            "write_stress": bool(cfg.write_stress),
+            "config": self._config_snapshot(),
+        }
+
+    def _config_snapshot(self) -> dict[str, dict[str, Any]]:
+        """WebUI 配置画像：linkage / control / prompt 三段的白名单字段当前值。"""
+        snap: dict[str, dict[str, Any]] = {
+            "linkage": {k: getattr(self.config.linkage, k, None) for k in _LINKAGE_WHITELIST},
+        }
+        for section, table in _SECTION_WHITELISTS.items():
+            obj = self._section_cfg(section)
+            snap[section] = {k: getattr(obj, k, None) for k in table}
+        return snap
+
+    # ---- WebUI P2：快捷配置（白名单补丁）与快捷动作 ----
+
+    def _config_path(self):
+        return getattr(self, "_cfg_path", _PLUGIN_DIR / "config.toml")
+
+    def _section_cfg(self, section: str):
+        """按段名取配置对象（linkage / control / prompt）。"""
+        if section == "control":
+            return self.config.control
+        if section == "prompt":
+            return self.config.prompt
+        return self.config.linkage
+
+    @staticmethod
+    def _split_list(raw: Any, cap: int = 64) -> list[str]:
+        """规范成 list[str]：**只按换行拆**（关键词/隐蔽语句本身可能含中英文逗号），去空白、滤空项、保序去重。"""
+        if isinstance(raw, (list, tuple)):
+            items = [str(x or "").strip() for x in raw]
+        else:
+            text = str(raw or "").replace("\r\n", "\n").replace("\r", "\n")
+            items = [x.strip() for x in text.split("\n")]
+        out: list[str] = []
+        for x in items:
+            if not x or x in out:
+                continue
+            out.append(x[:120])
+            if len(out) >= cap:
+                break
+        return out
+
+    def _apply_linkage_patch(self, patch: dict) -> tuple[dict, list[str]]:
+        """校验并应用配置补丁（支持 "段.键" 前缀；无前缀默认 linkage）：内存生效 + 写回 config.toml。"""
+        applied: dict[str, Any] = {}
+        rejected: list[str] = []
+        by_section: dict[str, dict[str, Any]] = {}
+        for raw_key, raw in (patch or {}).items():
+            key = str(raw_key).strip()
+            if "." in key:
+                section, name = key.split(".", 1)
+            else:
+                section, name = "linkage", key
+            table = _LINKAGE_WHITELIST if section == "linkage" else _SECTION_WHITELISTS.get(
+                section, {})
+            spec = table.get(name)
+            if spec is None:
+                rejected.append(f"{key}: 不在白名单")
+                continue
+            kind, lo, hi = spec
+            try:
+                if kind == "bool":
+                    val: Any = bool(raw) if isinstance(raw, bool) else str(raw).lower() in (
+                        "1", "true", "on", "yes")
+                elif kind == "int":
+                    val = int(float(raw))
+                    if lo is not None:
+                        val = max(int(lo), min(int(hi), val))
+                elif kind == "float":
+                    val = round(float(raw), 3)
+                    if lo is not None:
+                        val = max(float(lo), min(float(hi), val))
+                elif kind == "list":
+                    val = self._split_list(raw)
+                    if not val and section == "control" and name in (
+                            "enter_keywords", "exit_keywords"):
+                        rejected.append(f"{key}: 不能为空（空列表会让关键词永不触发）")
+                        continue
+                elif kind == "multiline":
+                    val = str(raw or "")[:4000]
+                else:
+                    val = str(raw or "")[:200]
+            except (TypeError, ValueError):
+                rejected.append(f"{key}: 值非法")
+                continue
+            try:
+                setattr(self._section_cfg(section), name, val)
+            except Exception as exc:  # noqa: BLE001
+                rejected.append(f"{key}: {exc}"[:80])
+                continue
+            applied[key] = val
+            by_section.setdefault(section, {})[name] = val
+        for section, values in by_section.items():
+            self._write_config_section(section, values)
+        return applied, rejected
+
+    def _write_config_section(self, section: str, applied: dict) -> None:
+        """把已应用的键写回 config.toml 的指定段（只改该段，其余原样保留）。"""
+        path = self._config_path()
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.logger.warning("读取 config.toml 失败（配置仅内存生效）：%r", exc)
+            return
+        lines = text.splitlines()
+        header = f"[{section}]"
+        start = next((i for i, ln in enumerate(lines) if ln.strip() == header), None)
+        if start is None:
+            lines.extend(["", header])
+            start = len(lines) - 1
+        end = next((i for i in range(start + 1, len(lines))
+                    if lines[i].lstrip().startswith("[")), len(lines))
+
+        def fmt(v: Any) -> str:
+            if isinstance(v, bool):
+                return "true" if v else "false"
+            if isinstance(v, (list, tuple)):
+                inner = ", ".join('"' + str(x).replace('"', '\\"') + '"' for x in v)
+                return f"[{inner}]"
+            if isinstance(v, str):
+                return '"' + v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
+            return str(v)
+
+        for key, val in applied.items():
+            new_line = f"{key} = {fmt(val)}"
+            for i in range(start + 1, end):
+                if lines[i].split("=", 1)[0].strip() == key:
+                    lines[i] = new_line
+                    break
+            else:
+                lines.insert(end, new_line)
+                end += 1
+        try:
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.logger.warning("写回 config.toml 失败（配置仅内存生效）：%r", exc)
+
+    @API(name="webui_linkage_config",
+         description="联动配置补丁（白名单键）：内存立即生效并写回 config.toml，供 WebUI 快捷配置区使用",
+         version="1", public=False)
+    async def webui_linkage_config(self, patch: str = "", **kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        try:
+            data = json.loads(patch) if patch else {}
+        except Exception:  # noqa: BLE001
+            return {"ok": False, "error": "patch 不是合法 JSON"}
+        if not isinstance(data, dict):
+            return {"ok": False, "error": "patch 必须是对象"}
+        applied, rejected = self._apply_linkage_patch(data)
+        if applied:
+            self.ctx.logger.info("WebUI 快捷配置已应用：%s", ", ".join(applied))
+        return {"ok": True, "applied": applied, "rejected": rejected}
+
+    @API(name="webui_linkage_action",
+         description="联动快捷动作：release 立即泄压 / clear 清空会话 / pause 暂停滴灌 / resume 恢复滴灌",
+         version="1", public=False)
+    async def webui_linkage_action(self, op: str = "", **kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        name = str(op or "").strip().lower()
+        if name == "release":
+            cfg = self.config.linkage
+            delta = float(cfg.release_on_stop or -15.0)
+            await self._body_guard(lambda: self._body_write(delta, label="手动泄压"))
+            return {"ok": True, "op": name, "delta": delta}
+        if name == "clear":
+            cleared = self._store.clear()
+            self._active_sessions.clear()
+            self._body_tick.clear()
+            self._body_released.clear()
+            return {"ok": True, "op": name, "cleared": int(cleared)}
+        if name in ("pause", "resume"):
+            applied, rejected = self._apply_linkage_patch({"write_stress": name == "resume"})
+            return {"ok": True, "op": name, "applied": applied, "rejected": rejected}
+        return {"ok": False, "error": f"未知操作: {name}"}
 
 
 def create_plugin() -> ImmersiveControlPlugin:

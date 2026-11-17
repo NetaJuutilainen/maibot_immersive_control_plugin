@@ -33,6 +33,12 @@ def Command(name: str, description: str = "", pattern: str = "", aliases=None, *
     )
 
 
+def API(name: str, description: str = "", version: str = "1", public: bool = False, **meta):
+    return _component_decorator(
+        "api", name, description=description, version=version, public=public, **meta
+    )
+
+
 def HookHandler(hook: str, *, name: str = "", description: str = "", mode=None,
                 order=None, timeout_ms: int = 0, error_policy=None, **meta):
     return _component_decorator(

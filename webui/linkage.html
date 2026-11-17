@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>麦麦遥控器</title>
+<style>
+  /* 主题：只用宿主 --maibot-* 变量；背景透明让宿主底纹连续；缺失变量用派生兜底（不写死颜色） */
+  :root{ --ms-ok:#22c55e; --ms-warn:#f59e0b; --ms-bad:#ef4444; }
+  *{box-sizing:border-box}
+  html,body{background:transparent}
+  body{margin:0;padding:16px 16px 36px;
+       color:var(--maibot-foreground,#1e293b);
+       font-family:var(--maibot-font-body,"Microsoft YaHei","PingFang SC",system-ui,sans-serif);
+       font-size:15px;line-height:1.6}
+  .wrap{max-width:1040px;margin:0 auto}
+  h1{font-size:20px;margin:0 0 4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .sub{color:var(--maibot-muted,#64748b);font-size:12.5px;margin-bottom:14px}
+  .lamps{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .lamp{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;
+        background:var(--maibot-surface,rgba(127,127,127,.10));
+        border:1px solid var(--maibot-border,rgba(127,127,127,.30));
+        border-radius:var(--maibot-radius,0px);padding:4px 12px}
+  .lamp i{width:9px;height:9px;border-radius:99px;display:inline-block;background:var(--maibot-muted,#94a3b8)}
+  .lamp.g{color:var(--ms-ok);border-color:var(--ms-ok)} .lamp.g i{background:var(--ms-ok)}
+  .lamp.y{color:var(--ms-warn);border-color:var(--ms-warn)} .lamp.y i{background:var(--ms-warn)}
+  .lamp.r{color:var(--ms-bad);border-color:var(--ms-bad)} .lamp.r i{background:var(--ms-bad)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px}
+  .panel{background-color:var(--maibot-surface,rgba(127,127,127,.08));
+         border:1px solid var(--maibot-border,rgba(127,127,127,.28));
+         border-radius:var(--maibot-radius,0px);padding:14px 16px;margin-bottom:14px;min-width:0}
+  .panel h2{font-size:14px;margin:0 0 12px;white-space:normal;color:var(--maibot-foreground,#1e293b);font-weight:600;letter-spacing:.04em}
+  .bar-row{margin:12px 0 6px}
+  .bar-label{display:flex;justify-content:space-between;gap:12px;font-size:13px;margin-bottom:5px}
+  .bar-label span:first-child{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bar-label .v{flex:0 0 auto;color:var(--maibot-muted,#64748b);font-variant-numeric:tabular-nums}
+  .track{position:relative;height:18px;background:var(--maibot-soft,rgba(127,127,127,.18));
+         border-radius:var(--maibot-radius,0px);border:1px solid var(--maibot-border,rgba(127,127,127,.28))}
+  .fill{position:absolute;top:2px;bottom:2px;left:2px;border-radius:99px;
+        background:linear-gradient(90deg,#3b82f6,#22d3ee);
+        transition:width 3s linear;border-radius:var(--maibot-radius,0px)}
+  .fill.rainbow{background:linear-gradient(90deg,#8b5cf6,#a855f7,#ec4899)}
+  .fill.ghost{background:linear-gradient(90deg,#22d3ee,#8b5cf6,#ec4899);opacity:.35}
+  .fill.warn{background:linear-gradient(90deg,#f59e0b,#f97316)}
+  .fill.bad{background:linear-gradient(90deg,#ef4444,#ec4899)}
+  .marker{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--ms-warn);opacity:.9}
+  .marker.deep{background:var(--ms-bad)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--maibot-muted,#64748b);margin-top:7px}
+  .legend em{display:inline-block;width:10px;height:2px;background:var(--ms-warn);vertical-align:middle;margin-right:4px}
+  .legend em.deep{background:var(--ms-bad)}
+  table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}
+  th,td{border-bottom:1px solid var(--maibot-border,rgba(127,127,127,.28));padding:7px 6px;text-align:left;
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  th{color:var(--maibot-muted,#64748b);font-weight:600}
+  .note{font-size:12px;color:var(--maibot-muted,#64748b);margin-top:8px}
+  .hint{padding:10px 14px;border-radius:var(--maibot-radius,10px);
+        background:var(--maibot-soft,rgba(127,127,127,.14));color:var(--maibot-muted,#475569);font-size:13px}
+  /* 配置组（可折叠） */
+  details{border:1px solid var(--maibot-border,rgba(127,127,127,.28));
+          border-radius:var(--maibot-radius,10px);padding:0 14px 10px;margin:10px 0;
+          background:var(--maibot-surface,rgba(127,127,127,.08))}
+  details>summary{cursor:pointer;padding:10px 0 8px;font-weight:600;font-size:14px;
+                  color:var(--maibot-foreground,#1e293b);list-style:none}
+  details>summary::-webkit-details-marker{display:none}
+  details>summary::before{content:"▸ ";color:var(--maibot-muted,#94a3b8)}
+  details[open]>summary::before{content:"▾ "}
+  .cfg{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px 16px}
+  .cfg label{display:flex;align-items:center;justify-content:space-between;gap:10px;
+             background:var(--maibot-soft,rgba(127,127,127,.14));border-radius:var(--maibot-radius,0px);padding:6px 10px;font-size:13px}
+  .cfg label span{flex:1 1 auto;min-width:0;white-space:normal;word-break:break-word;line-height:1.35}
+  .cfg input[type=number]{flex:0 0 88px;width:88px;background:var(--maibot-background,rgba(127,127,127,.10));
+        color:var(--maibot-foreground,#1e293b);border:1px solid var(--maibot-border,rgba(127,127,127,.32));
+        border-radius:6px;padding:3px 6px;font-size:13px}
+  .cfg input[type=checkbox]{flex:0 0 auto;width:17px;height:17px;accent-color:var(--maibot-primary,#3b82f6)}
+  .cfg .wide{grid-column:1/-1;flex-direction:column;align-items:stretch;gap:6px}
+  .cfg .wide>span{flex:0 0 auto;width:100%}
+  .cfg .wide textarea,.cfg .wide input[type=text]{flex:1 1 auto;width:100%}
+  .cfg .wide input[type=text],.cfg textarea{flex:1 1 auto;min-width:0;
+        background:var(--maibot-background,rgba(127,127,127,.10));color:var(--maibot-foreground,#1e293b);
+        border:1px solid var(--maibot-border,rgba(127,127,127,.32));border-radius:6px;
+        padding:4px 8px;font-size:13px;font-family:inherit}
+  .cfg textarea{width:100%;resize:vertical}
+  button{background:var(--maibot-primary,#2563eb);color:var(--maibot-primary-foreground,#fff);
+         border:none;border-radius:var(--maibot-radius,0px);padding:7px 16px;font-size:13.5px;cursor:pointer;font-family:inherit}
+  button.ghost{background:var(--maibot-soft,rgba(127,127,127,.18));color:var(--maibot-foreground,#1e293b)}
+  button:hover{filter:brightness(1.06)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .btns{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .toast{font-size:12.5px;color:var(--ms-ok)}
+  .toast.err{color:var(--ms-bad)}
+  /* ===== 三套主题差异化（bridge 注入 data-dashboard-style；页面根保持透明让宿主底纹穿透） ===== */
+  html[data-dashboard-style="millennium"] .panel,
+  html[data-dashboard-style="millennium"] details{
+    background-image:radial-gradient(color-mix(in srgb, var(--maibot-foreground) 9%, transparent) 1px, transparent 1px);
+    background-size:5px 5px;border:2px solid var(--maibot-border);
+    box-shadow:inset 2px 2px 0 color-mix(in srgb, white 14%, var(--maibot-surface)),
+               inset -2px -2px 0 color-mix(in srgb, black 18%, var(--maibot-surface))}
+  html[data-dashboard-style="millennium"] th,
+  html[data-dashboard-style="millennium"] th,html[data-dashboard-style="millennium"] td{border-bottom:2px solid var(--maibot-border)}
+  html[data-dashboard-style="future-retro"] .panel,
+  html[data-dashboard-style="future-retro"] details{
+    position:relative;background-color:transparent;border:2px solid var(--maibot-border);
+    box-shadow:none;overflow:hidden;isolation:isolate}
+  html[data-dashboard-style="future-retro"] .panel::before,
+  html[data-dashboard-style="future-retro"] details::before{
+    content:"";position:absolute;inset:0 auto 0 0;width:8px;background:var(--maibot-border)}
+  html[data-dashboard-style="future-retro"] .panel::after,
+  html[data-dashboard-style="future-retro"] details::after{
+    content:"";position:absolute;right:-1px;bottom:-1px;width:0;height:0;border-style:solid;
+    border-width:0 0 22px 22px;border-color:transparent transparent var(--maibot-border) transparent}
+  html[data-dashboard-style="future-retro"] .panel>*,
+  html[data-dashboard-style="future-retro"] details>*{position:relative;z-index:1}
+  html[data-dashboard-style="future-retro"] .track{
+    background-color:color-mix(in srgb, var(--maibot-foreground) 10%, transparent)}
+  html[data-dashboard-style="modern"] .panel{box-shadow:0 1px 2px rgb(0 0 0 / .05)}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>麦麦遥控器</h1>
+  <div class="sub">不依赖麦身体也是一个可用的遥控管理台：玩法/强度/提示词都在这里改（保存即生效，写回 config.toml）</div>
+
+  <div class="lamps" id="lamps"></div>
+  <div id="root"><div class="hint" id="boot">正在连接宿主桥……</div></div>
+
+  <div class="panel" id="opPanel" style="display:none">
+    <h2>⚡ 快捷动作</h2>
+    <div class="btns">
+      <button class="ghost" data-op="release">立即泄压</button>
+      <button class="ghost" data-op="pause">暂停滴灌</button>
+      <button class="ghost" data-op="resume">恢复滴灌</button>
+      <button class="ghost" data-op="clear">清空全部会话</button>
+      <span class="toast" id="opToast"></span>
+    </div>
+  </div>
+
+  <div class="panel" id="cfgPanel" style="display:none">
+    <h2>⚙ 快捷配置（保存即生效）</h2>
+    <div id="cfgGroups"></div>
+    <div class="btns" style="margin-top:10px">
+      <button id="saveCfg">保存全部修改</button>
+      <button class="ghost" id="resetCfg">放弃修改</button>
+      <span class="toast" id="cfgToast"></span>
+    </div>
+    <div class="note">列表字段每行一个（句内逗号会原样保留）；模板可使用 {item_name}、{sensitivity}、{duration} 占位符。
+      管理员白名单与管理员模式不在本页（避免把自己锁在门外），请到插件设置面板调整。</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var root = document.getElementById("root");
+  var lamps = document.getElementById("lamps");
+  var last = null;
+  var lastSyncAt = 0;   // 最近一次服务器数据到达时刻（本地倒计时基准）
+  var dirty = false;
+  var cfgInited = false;
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function lamp(kind, text) { return '<span class="lamp ' + kind + '"><i></i>' + esc(text) + "</span>"; }
+  function clampPct(v) { return Math.max(0, Math.min(100, Number(v) || 0)); }
+
+  function fmtRemain(sec) {
+    var s = Math.max(0, Math.ceil(Number(sec) || 0));
+    var m = Math.floor(s / 60), r = s % 60;
+    return m + ":" + (r < 10 ? "0" + r : r);
+  }
+
+  // 连续倒计时：以最近一次服务器值为基准，本地每 250ms 插值（下次轮询自动校准）
+  function tickCountdowns() {
+    if (!lastSyncAt) return;
+    var el = document.querySelectorAll("#root .rem[data-rem]");
+    var elapsed = (Date.now() - lastSyncAt) / 1000;
+    for (var i = 0; i < el.length; i++) {
+      var base = Number(el[i].getAttribute("data-rem")) || 0;
+      el[i].textContent = fmtRemain(base - elapsed);
+    }
+  }
+  function phaseName(p) {
+    return ({ deep_sleep: "深睡", light_sleep: "浅睡", falling_asleep: "入睡",
+              awake: "清醒", woken: "刚醒" })[p] || (p || "未知");
+  }
+
+  function renderLamps(d) {
+    var now = Date.now() / 1000;
+    var html = "";
+    html += (d.enabled && d.write_stress) ? lamp("g", "联动已开") : lamp("y", "联动未全开");
+    html += (d.stress === null) ? lamp("y", "麦身体未连接") : lamp("g", "麦身体已连接");
+    html += (d.breaker && d.breaker.open_until > now)
+      ? lamp("r", "熔断中 · " + Math.ceil(d.breaker.open_until - now) + "s")
+      : lamp("g", "熔断正常");
+    html += d.sleeping ? lamp("y", "睡眠中 · " + phaseName(d.sleep_phase)) : lamp("g", "醒着");
+    lamps.innerHTML = html;
+  }
+
+  function render(d) {
+    last = d;
+    // 若焦点在配置区控件内，跳过本次状态区重建，避免干扰输入
+    var ae = document.activeElement;
+    if (ae && ae.closest && ae.closest("#cfgGroups")) { ensureConfig(d.config || {}); return; }
+    renderLamps(d);
+    var meter = clampPct(d.wake_meter);
+    var light = Number(d.wake_threshold_light) || 60;
+    var deep = Number(d.wake_threshold_deep) || 100;
+    var stress = (d.stress === null || d.stress === undefined) ? null : clampPct(d.stress);
+    var target = clampPct(d.stress_target);
+    var cls = function (v) { return v >= 75 ? "fill bad" : (v >= 55 ? "fill warn" : "fill"); };
+    var rows = (d.sessions || []).map(function (s) {
+      return "<tr><td title='" + esc(s.display_name) + "'>" + esc(s.display_name) + "</td>" +
+        "<td>" + (s.is_group ? "群聊" : "私聊") + "</td><td>" + esc(s.sensitivity) +
+        '</td><td class="rem" data-rem="' + esc(s.remaining_seconds) + '">' + fmtRemain(s.remaining_seconds) + "</td><td>" + esc(s.climax_count) +
+        "</td><td>" + (s.released ? "已泄" : "—") + "</td></tr>";
+    }).join("");
+    if (!rows) rows = '<tr><td colspan="6" style="color:var(--maibot-muted,#64748b)">当前没有激活中的会话</td></tr>';
+    root.innerHTML =
+      '<div class="grid">' +
+        '<div class="panel"><h2>觉醒值</h2>' +
+          '<div class="bar-row"><div class="bar-label"><span>睡梦中被触发的积累</span>' +
+          '<span class="v">' + esc(meter) + " / 100</span></div>" +
+          '<div class="track"><div class="fill rainbow" style="width:' + meter + '%"></div>' +
+          '<div class="marker" style="left:' + light + '%"></div>' +
+          '<div class="marker deep" style="left:' + Math.min(99, deep) + '%"></div></div>' +
+          '<div class="legend"><span><em></em>浅睡阈值 ' + esc(light) + "</span>" +
+          '<span><em class="deep"></em>深睡阈值 ' + esc(deep) + "</span></div>" +
+          '<div class="note">引爆阈值随睡眠深度：深睡攒满、浅睡半条即醒；攒到阈值线后，等祂自然醒来那一瞬触发余韵引爆。</div></div></div>' +
+        '<div class="panel"><h2>压力 · 当前 vs 预计压力</h2>' +
+          '<div class="bar-row"><div class="bar-label"><span>当前压力（麦身体实测）</span>' +
+          '<span class="v">' + (stress === null ? "—" : esc(stress) + " / 100") + "</span></div>" +
+          '<div class="track"><div class="' + cls(stress || 0) + '" style="width:' + (stress || 0) + '%"></div></div></div>' +
+          '<div class="bar-row"><div class="bar-label"><span>预计压力（基线 + 区间×强度/120）</span>' +
+          '<span class="v">' + esc(d.stress_target) + "</span></div>" +
+          '<div class="track"><div class="fill ghost" style="width:' + target + '%"></div>' +
+          '<div class="marker" style="left:' + Math.min(99, target) + '%"></div></div></div>' +
+          '<div class="note">压力每 ' + esc(d.drip_interval) + " 秒向预计压力追踪；无会话时由身体自身缓慢回落（引擎 τ≈15 分钟）。</div></div>" +
+      "</div>" +
+      '<div class="panel"><h2>激活会话（' + esc((d.sessions || []).length) + "）</h2>" +
+        "<table><colgroup><col style='width:34%'><col style='width:11%'><col style='width:12%'>" +
+        "<col style='width:15%'><col style='width:14%'><col style='width:14%'></colgroup>" +
+        "<tr><th>会话</th><th>来源</th><th>强度</th><th>剩余</th><th>climax</th><th>泄压</th></tr>" +
+        rows + "</table></div>";
+    lastSyncAt = Date.now();   // 倒计时基准刷新
+    ensureConfig(d.config || {});
+    document.getElementById("cfgPanel").style.display = "";
+    document.getElementById("opPanel").style.display = "";
+  }
+
+  // ===== 配置字段表：section.key =====
+  var GROUPS = [
+    { id: "control-base", title: "基础玩法（关键词 / 时长 / 冷却 / 并发）", fields: [
+      { sec: "control", k: "require_at", t: "bool", label: "群聊需 @机器人" },
+      { sec: "control", k: "react_on_trigger", t: "bool", label: "触发瞬间立刻回应" },
+      { sec: "control", k: "stealth_mode", t: "bool", label: "隐蔽模式（回执改日常语句）" },
+      { sec: "control", k: "state_duration", t: "num", label: "状态持续（秒）", min: 10, max: 3600 },
+      { sec: "control", k: "cooldown_seconds", t: "num", label: "冷却（秒）", min: 0, max: 3600 },
+      { sec: "control", k: "max_concurrent", t: "num", label: "并发上限", min: 1, max: 9999 },
+      { sec: "control", k: "exit_pending_ttl", t: "num", label: "退出提示有效期（秒）", min: 5, max: 3600 },
+      { sec: "control", k: "enter_keywords", t: "list", label: "进入关键词（每行一个）", wide: true },
+      { sec: "control", k: "exit_keywords", t: "list", label: "退出关键词（每行一个）", wide: true },
+      { sec: "control", k: "stealth_phrases", t: "list", label: "隐蔽语句池（每行一个，句内可含逗号）", wide: true }
+    ]},
+    { id: "control-climax", title: "强度与顶点（自动档 / 阈值 / 越限）", fields: [
+      { sec: "prompt", k: "sensitivity", t: "num", label: "全局敏感度 0-100", min: 0, max: 100 },
+      { sec: "control", k: "proactive_threshold", t: "num", label: "阈值主动表达（0=关）", min: 0, max: 120 },
+      { sec: "control", k: "auto_speed_per_minute", t: "num", label: "自动模式速度（点/分）", min: 1, max: 120 },
+      { sec: "control", k: "climax_threshold", t: "num", label: "越限触发阈值（0=关）", min: 0, max: 120 },
+      { sec: "control", k: "climax_hold_seconds", t: "num", label: "越限持续秒数", min: 1, max: 600 },
+      { sec: "control", k: "climax_max_per_activation", t: "num", label: "每次激活最多触发次数", min: 1, max: 99 }
+    ]},
+    { id: "prompt", title: "提示词与文案（玩具名 / 六档说明 / 模板）", fields: [
+      { sec: "prompt", k: "item_name", t: "text", label: "玩具名称 {item_name}", wide: true },
+      { sec: "prompt", k: "climax_emoji", t: "text", label: "顶点暗号 emoji（留空关闭）", wide: true },
+      { sec: "prompt", k: "tier_0_20", t: "area", label: "档位 0-20" },
+      { sec: "prompt", k: "tier_20_40", t: "area", label: "档位 20-40" },
+      { sec: "prompt", k: "tier_40_60", t: "area", label: "档位 40-60" },
+      { sec: "prompt", k: "tier_60_80", t: "area", label: "档位 60-80" },
+      { sec: "prompt", k: "tier_80_100", t: "area", label: "档位 80-100" },
+      { sec: "prompt", k: "tier_100_120", t: "area", label: "档位 100-120" },
+      { sec: "prompt", k: "enter_template", t: "area", label: "进入模板 {item_name}/{sensitivity}/{duration}", wide: true, rows: 5 },
+      { sec: "prompt", k: "climax_template", t: "area", label: "顶点模板 {item_name}/{sensitivity}（{duration} 不生效）", wide: true, rows: 4 },
+      { sec: "prompt", k: "exit_template", t: "area", label: "退出模板 {item_name}/{sensitivity}（{duration} 不生效）", wide: true, rows: 4 }
+    ]},
+    { id: "linkage", title: "麦身体联动（开关 / 压力模型 / 觉醒）", fields: [
+      { sec: "linkage", k: "enabled", t: "bool", label: "联动总开关" },
+      { sec: "linkage", k: "write_stress", t: "bool", label: "压力写回麦身体" },
+      { sec: "linkage", k: "inject_body_text", t: "bool", label: "身体文案注入" },
+      { sec: "linkage", k: "sensitivity_boost", t: "bool", label: "敏感度显示加成" },
+      { sec: "linkage", k: "tick_interval_seconds", t: "num", label: "滴灌周期（秒）", min: 10, max: 600 },
+      { sec: "linkage", k: "stress_target_base", t: "num", label: "预计压力基线", min: 0, max: 100 },
+      { sec: "linkage", k: "stress_target_range", t: "num", label: "预计压力区间", min: 0, max: 100 },
+      { sec: "linkage", k: "stress_approach_gain", t: "num", label: "追踪速度（0.05-1）", min: 0.05, max: 1, step: 0.05 },
+      { sec: "linkage", k: "stress_max_step", t: "num", label: "单 tick 步长上限", min: 0, max: 20, step: 0.5 },
+      { sec: "linkage", k: "wake_meter_factor", t: "num", label: "觉醒值累积比例", min: 0, max: 1, step: 0.1 },
+      { sec: "linkage", k: "wake_threshold_light", t: "num", label: "浅睡引爆阈值", min: 20, max: 100 },
+      { sec: "linkage", k: "wake_threshold_deep", t: "num", label: "深睡引爆阈值", min: 40, max: 100 },
+      { sec: "linkage", k: "release_on_stop", t: "num", label: "泄压量（climax满/停止）", min: -20, max: 20 },
+      { sec: "linkage", k: "auto_cooldown", t: "bool", label: "无会话时主动冷却" },
+      { sec: "linkage", k: "cooldown_rate_per_minute", t: "num", label: "冷却速率（点/分）", min: 0, max: 10, step: 0.5 },
+      { sec: "linkage", k: "cooldown_floor", t: "num", label: "冷却下限", min: 0, max: 100 },
+      { sec: "linkage", k: "body_wake_note_text", t: "text", label: "睡梦余韵记账文案", wide: true }
+    ]}
+  ];
+
+  function getCfg(cfg, sec, k) {
+    var s = cfg[sec];
+    return s ? s[k] : undefined;
+  }
+
+  function markDirty() {
+    if (dirty) return;
+    dirty = true;
+    var el = document.getElementById("cfgToast");
+    if (el) { el.className = "toast"; el.textContent = "● 有未保存修改（配置区已暂停自动重建，点「保存全部修改」生效）"; }
+  }
+
+  function ensureConfig(cfg) {
+    if (cfgInited || dirty) return;   // 已建过或用户正在编辑：绝不重建，避免打断输入
+    bindConfig(cfg);
+    cfgInited = true;
+    document.getElementById("cfgGroups").addEventListener("input", markDirty);
+    document.getElementById("cfgGroups").addEventListener("change", markDirty);
+  }
+
+  function bindConfig(cfg) {
+    var holder = document.getElementById("cfgGroups");
+    holder.innerHTML = GROUPS.map(function (g, gi) {
+      var rows = g.fields.map(function (f) {
+        var v = getCfg(cfg, f.sec, f.k);
+        var attrs = 'data-sec="' + f.sec + '" data-k="' + f.k + '" data-t="' + f.t + '"';
+        if (f.t === "bool") {
+          return '<label class="' + (f.wide ? "wide" : "") + '"><span>' + esc(f.label) + "</span>" +
+            '<input type="checkbox" ' + attrs + (v ? " checked" : "") + "></label>";
+        }
+        if (f.t === "num") {
+          return '<label class="' + (f.wide ? "wide" : "") + '"><span>' + esc(f.label) + "</span>" +
+            '<input type="number" ' + attrs +
+            (f.min != null ? ' min="' + f.min + '"' : "") + (f.max != null ? ' max="' + f.max + '"' : "") +
+            (f.step ? ' step="' + f.step + '"' : "") + ' value="' + esc(v == null ? "" : v) + '"></label>';
+        }
+        if (f.t === "list") {
+          var txt = Array.isArray(v) ? v.join("\n") : (v || "");
+          return '<label class="wide"><span>' + esc(f.label) + "</span>" +
+            '<textarea ' + attrs + ' rows="4">' + esc(txt) + "</textarea></label>";
+        }
+        if (f.t === "area") {
+          return '<label class="wide"><span>' + esc(f.label) + "</span>" +
+            '<textarea ' + attrs + ' rows="' + (f.rows || 3) + '">' + esc(v || "") + "</textarea></label>";
+        }
+        return '<label class="' + (f.wide ? "wide" : "") + '"><span>' + esc(f.label) + "</span>" +
+          '<input type="text" ' + attrs + ' maxlength="200" value="' + esc(v == null ? "" : v) + '"></label>';
+      }).join("");
+      return "<details" + (gi < 2 ? " open" : "") + "><summary>" + esc(g.title) + "</summary>" +
+        '<div class="cfg">' + rows + "</div></details>";
+    }).join("");
+  }
+
+  function readConfig() {
+    var patch = {};
+    document.querySelectorAll("#cfgGroups [data-k]").forEach(function (el) {
+      var sec = el.getAttribute("data-sec"), k = el.getAttribute("data-k"),
+          t = el.getAttribute("data-t"), key = sec + "." + k;
+      if (t === "bool") patch[key] = !!el.checked;
+      else if (t === "num") { if (el.value !== "") patch[key] = Number(el.value); }
+      else if (t === "list") patch[key] = el.value;
+      else patch[key] = el.value;
+    });
+    return patch;
+  }
+
+  function toast(id, text, isErr) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.className = "toast" + (isErr ? " err" : "");
+    clearTimeout(el.__t);
+    el.__t = setTimeout(function () { el.textContent = ""; }, 4000);
+  }
+
+  document.getElementById("saveCfg").addEventListener("click", function () {
+    window.maibot.action("config", { patch: JSON.stringify(readConfig()) }).then(function (r) {
+      if (r && r.ok) {
+        var n = Object.keys(r.applied || {}).length;
+        var rej = (r.rejected && r.rejected.length) ? "；未采纳：" + r.rejected.join("，") : "";
+        dirty = false;
+        cfgInited = false;   // 下次轮询用服务器最新值重建
+        toast("cfgToast", "已保存 " + n + " 项" + rej, !!rej);
+        load();
+      } else {
+        toast("cfgToast", "保存失败：" + ((r && r.error) || "未知错误"), true);
+      }
+    }).catch(function (err) { toast("cfgToast", "保存失败：" + ((err && err.message) || err), true); });
+  });
+
+  document.getElementById("resetCfg").addEventListener("click", function () {
+    dirty = false;
+    cfgInited = false;
+    if (last) { bindConfig(last.config || {}); cfgInited = true;
+      document.getElementById("cfgGroups").addEventListener("input", markDirty);
+      document.getElementById("cfgGroups").addEventListener("change", markDirty);
+    }
+    toast("cfgToast", "已放弃未保存的修改", false);
+  });
+
+  document.querySelectorAll("[data-op]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var op = btn.getAttribute("data-op");
+      btn.disabled = true;
+      window.maibot.action("op", { op: op }).then(function (r) {
+        if (r && r.ok) { toast("opToast", "已执行：" + op, false); load(); }
+        else toast("opToast", "执行失败：" + ((r && r.error) || "未知错误"), true);
+      }).catch(function (err) { toast("opToast", "执行失败：" + ((err && err.message) || err), true); })
+        .then(function () { btn.disabled = false; });
+    });
+  });
+
+  function showError(msg) {
+    var el = document.getElementById("boot");
+    if (el) { el.textContent = "加载失败：" + msg + "（3 秒后自动重试）"; return; }
+    lamps.innerHTML = lamp("r", "加载失败");
+  }
+  function load() {
+    window.maibot.query("linkage").then(function (d) {
+      if (!d || d.ok === false) { showError((d && d.error) || "返回数据异常"); return; }
+      render(d);
+    }).catch(function (err) { showError((err && err.message) || String(err)); });
+  }
+
+  if (!window.maibot) {
+    document.getElementById("boot").textContent =
+      "❌ 宿主桥未注入（window.maibot 不存在）——请完全刷新 WebUI（Ctrl+F5）；若仍出现，说明插件注册失败，先查服务端日志「WebUI 声明无效」。";
+    return;
+  }
+  window.maibot.ready.then(function () { load(); setInterval(load, 3000);
+    setInterval(tickCountdowns, 250); })
+    .catch(function (err) {
+      document.getElementById("boot").textContent = "桥初始化失败：" + ((err && err.message) || String(err));
+    });
+})();
+</script>
+</body>
+</html>
