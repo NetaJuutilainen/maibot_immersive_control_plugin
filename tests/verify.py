@@ -200,8 +200,12 @@ async def main() -> None:
           manifest["id"])
     check("version 三段式", bool(re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"])))
     caps = manifest["capabilities"]
-    check("能力名均为 <代理>.<方法> 格式",
-          all(re.fullmatch(r"[a-z_]+(?:\.[a-z_]+)+", c) for c in caps), str(caps))
+    # 宿主有两类能力名：运行时能力 <代理>.<方法>（send.text / api.call…），
+    # 以及 webui.json 作用域的声明式能力（custom_pages / image_upload…，见宿主 webui_schema.WEBUI_CAPABILITIES）
+    WEBUI_SCOPE_CAPS = {"declarative_basic", "custom_pages", "image_upload", "structured_arguments"}
+    check("能力名均为 <代理>.<方法> 格式或 webui 声明式能力",
+          all(re.fullmatch(r"[a-z_]+(?:\.[a-z_]+)+", c) or c in WEBUI_SCOPE_CAPS for c in caps),
+          str(caps))
     check("send.text 已声明", "send.text" in caps, str(caps))
     check("maisaka 能力已声明",
           "maisaka.proactive.trigger" in caps and "maisaka.context.append" in caps, str(caps))

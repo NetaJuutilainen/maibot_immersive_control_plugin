@@ -1,5 +1,14 @@
 # 更新日志
 
+## v1.1.1（2026-11-18）
+
+- **补声明：manifest `capabilities` 增加 `custom_pages`**（纯声明，无功能变更）。
+  v1.1.0 的 `webui.json` 已按要求声明 `required_capabilities: ["custom_pages"]` 才能注册
+  「麦麦遥控器」自定义页，但 manifest 侧未同步列出该项——市场静态审核据此判为需人工处理。
+  宿主实际只在 `webui.json` 内部校验该能力（不跨查 manifest），因此页面此前一直正常加载；
+  本次补齐仅为对齐市场惯例与声明一致。
+- 其余代码与 v1.1.0 完全一致。
+
 ## v1.1.0（2026-11-17）
 
 - **新增：与「麦麦身体」（maibot-body-emulator）的联动模块**（`[linkage]` 配置节，**全部默认关**——
