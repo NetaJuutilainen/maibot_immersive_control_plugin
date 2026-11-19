@@ -65,7 +65,12 @@ BODY_SICK_BELOW = 40.0      # health 低于该值 → 不舒服
 BODY_TENSE_ABOVE = 55.0     # stress 高于该值 → 紧绷档文案
 BODY_BREAKDOWN_ABOVE = 70.0  # stress 高于该值 → 濒临崩溃档文案（叠加）
 BODY_BLANK_ABOVE = 90.0     # stress 高于该值 → 大脑空白档文案（叠加）
+BODY_EXCITED_ABOVE = 60.0    # euphoria 高于该值 → 亢奋档文案（body 1.3.0+）
+BODY_IRRITABLE_ABOVE = 60.0  # dysphoria 高于该值 → 烦躁档文案（body 1.3.0+）
 BODY_TEXT_CAP = 40          # 每条身体文案上限（字），防多条命中叠加超出 token 预算
+
+# 顶点情绪脉冲：第 n 次顶点按 0.75^(n-1) 递减，避免连顶点把 valence 顶满
+BODY_CLIMAX_VALENCE_DECAY = 0.75
 
 # 顶点 emoji 标记的附加指令（{e} 为配置的 emoji）
 _EMOJI_HINT = "（此条回复的结尾不经意地带上{e}，不要解释原因。）"
@@ -98,6 +103,9 @@ _LINKAGE_WHITELIST: dict[str, tuple[str, Any, Any]] = {
     "sleep_wake_threshold": ("float", 0.0, 100.0),
     "release_on_climax_full": ("float", -20.0, 20.0),
     "release_on_stop": ("float", -20.0, 20.0),
+    "climax_valence": ("float", 0.0, 20.0),
+    "climax_stress_release": ("float", -10.0, 0.0),
+    "afterglow_valence": ("float", 0.0, 15.0),
     "auto_cooldown": ("bool", None, None),
     "cooldown_rate_per_minute": ("float", 0.0, 10.0),
     "cooldown_floor": ("float", 0.0, 100.0),
@@ -345,10 +353,15 @@ class ImmersiveControlPlugin(MaiBotPlugin):
             add(True, link_cfg.body_breakdown_text)
         elif stress_v >= BODY_TENSE_ABOVE:
             add(True, link_cfg.body_tense_text)
+        add(float(state.get("euphoria", 0.0)) >= BODY_EXCITED_ABOVE,
+            link_cfg.body_excited_text)
+        add(float(state.get("dysphoria", 0.0)) >= BODY_IRRITABLE_ABOVE,
+            link_cfg.body_irritable_text)
         return "；".join(parts)
 
-    async def _body_write(self, delta: float, label: str, depression_delta: float = 0.0) -> None:
-        """B：写一次压力变化。睡眠场景关闭（阈值=0）时睡着不写；失败静默不重试。"""
+    async def _body_write(self, delta: float, label: str, depression_delta: float = 0.0,
+                          valence: float = 0.0) -> None:
+        """B：写一次压力/情绪变化。睡眠场景关闭（阈值=0）时睡着不写；失败静默不重试。"""
         link_cfg = self.config.linkage
         if not link_cfg.enabled or not link_cfg.write_stress:
             return
@@ -357,11 +370,17 @@ class ImmersiveControlPlugin(MaiBotPlugin):
             return
         if bool(state.get("sleeping")) and float(link_cfg.sleep_wake_threshold) <= 0:
             return  # 睡眠场景关闭：睡着不写（守卫回退到原语义）
+        if valence:
+            # 情绪写入只对 body 1.3.0+ 生效；睡着时不写（避免睡梦中被刷开心）
+            if bool(state.get("sleeping")) or not bool(state.get("mood_capable")):
+                valence = 0.0
         try:
             ok = await self._body().adjust_mood(float(delta), label=label,
-                                                depression_delta=float(depression_delta))
+                                                depression_delta=float(depression_delta),
+                                                valence=float(valence))
             if ok:
-                self.ctx.logger.debug("身体写入 %+.1f/%+.2f（%s）", delta, depression_delta, label)
+                self.ctx.logger.debug("身体写入 %+.1f/%+.2f/valence%+.1f（%s）",
+                                      delta, depression_delta, valence, label)
             else:
                 self.ctx.logger.debug("身体写入未生效（%s）：%s", label, self._body()._last_error)
         except Exception as exc:  # noqa: BLE001
@@ -466,6 +485,22 @@ class ImmersiveControlPlugin(MaiBotPlugin):
             self._body_released.add(session_id)  # 先改簿记后 await
             await self._body_write(float(link_cfg.release_on_climax_full), label="顶点额度用尽泄压")
 
+    async def _body_on_climax(self, session_id: str) -> None:
+        """B：每次顶点给一次正向情绪脉冲（按 0.75 递减），并小泄一口压力形成锯齿。"""
+        link_cfg = self.config.linkage
+        if not link_cfg.enabled or not link_cfg.write_stress:
+            return
+        s = self._store.sessions.get(session_id)
+        if s is None:
+            return
+        n = max(1, int(getattr(s, "climax_count", 0)))
+        base = float(link_cfg.climax_valence)
+        val = base * (BODY_CLIMAX_VALENCE_DECAY ** (n - 1)) if base > 0 else 0.0
+        drop = float(link_cfg.climax_stress_release)
+        if not val and not drop:
+            return
+        await self._body_write(drop, label=f"顶点第{n}次", valence=val)
+
     async def _body_ticker(self) -> None:
         """后台滴灌定时器（修复：睡着/夜间麦麦不回话时压力不再累积的结构性问题）。
 
@@ -544,7 +579,12 @@ class ImmersiveControlPlugin(MaiBotPlugin):
             self._active_sessions.discard(session_id)  # 先改集合后 await
             self._body_tick.pop(session_id, None)      # 追踪锚点一并清掉
             if state == "exit" and float(link_cfg.release_on_stop):
-                await self._body_write(float(link_cfg.release_on_stop), label="玩具停下泄压")
+                s = self._store.sessions.get(session_id)
+                climaxes = int(getattr(s, "climax_count", 0)) if s is not None else 0
+                # 只有真的到过顶点才给「余韵」；无顶点直接停只泄压，不凭空发糖
+                afterglow = float(link_cfg.afterglow_valence) if climaxes > 0 else 0.0
+                await self._body_write(float(link_cfg.release_on_stop), label="玩具停下泄压",
+                                       valence=afterglow)
 
     async def _body_display_boost(self) -> int:
         """A②（默认关）：身体脆弱 → 显示用加成值；仅注入档位与 /强度 显示，机制判定永不加成。"""
@@ -833,6 +873,7 @@ class ImmersiveControlPlugin(MaiBotPlugin):
             climax_inject = self._check_climax(session_id, effective)
             if climax_inject:
                 inject = f"{inject}\n{climax_inject}"
+                await self._body_guard(lambda: self._body_on_climax(session_id))
             # B：顶点额度用尽 → 泄压一次（判定用未加成的 effective，机制不受 A② 影响）
             await self._body_guard(lambda: self._body_on_climax_full(session_id))
             # B 核心：压力向「强度目标」追踪（强度降自然回落；自然超时不泄压）

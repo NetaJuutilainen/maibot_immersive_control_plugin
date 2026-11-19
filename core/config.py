@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from maibot_sdk import Field, PluginConfigBase
 
-SUPPORTED_CONFIG_VERSION = "1.1.1"
+SUPPORTED_CONFIG_VERSION = "1.2.0"
 
 # 提示词模板中的占位符（用 replace 而非 str.format，模板中出现裸花括号也不会炸）
 PLACEHOLDER_ITEM = "{item_name}"
@@ -249,6 +249,16 @@ class LinkageSectionConfig(PluginConfigBase):
         description="麦麦正在仿真睡眠时的身体文案（留空禁用该条，上限 40 字）",
         json_schema_extra={"rows": 2},
     )
+    body_excited_text: str = Field(
+        default="心跳还没缓下来，脑子轻飘飘的",
+        description="欣快（euphoria）≥60 时的身体文案（body 1.3.0+；留空禁用，上限 40 字）",
+        json_schema_extra={"rows": 2},
+    )
+    body_irritable_text: str = Field(
+        default="心里莫名发躁，耐心很薄",
+        description="烦躁（dysphoria）≥60 时的身体文案（body 1.3.0+；留空禁用，上限 40 字）",
+        json_schema_extra={"rows": 2},
+    )
     sensitivity_boost: bool = Field(
         default=False,
         description="身体脆弱时给敏感度表现加成（仅注入档位与 /强度 显示用，机制判定永不加成）",
@@ -293,6 +303,18 @@ class LinkageSectionConfig(PluginConfigBase):
     release_on_stop: float = Field(
         default=-15.0, ge=-20.0, le=20.0,
         description="玩具停下（退出关键词）时的泄压量；自然超时结束不泄压，压力顶在原地自然回落",
+    )
+    climax_valence: float = Field(
+        default=12.0, ge=0.0, le=20.0,
+        description="每次顶点给身体的瞬时心情（body 1.3.0+ valence；第 2/3 次按 0.75 递减；0=关闭）",
+    )
+    climax_stress_release: float = Field(
+        default=-4.0, ge=-10.0, le=0.0,
+        description="每次顶点的小泄压（压力点，负值=下降）：与持续滴灌形成锯齿；0=不泄",
+    )
+    afterglow_valence: float = Field(
+        default=5.0, ge=0.0, le=15.0,
+        description="到过顶点后正常停下时的余韵心情（body 1.3.0+；无顶点直接停不给；0=关闭）",
     )
     auto_cooldown: bool = Field(
         default=True,

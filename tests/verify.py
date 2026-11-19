@@ -1121,7 +1121,10 @@ async def main() -> None:
         p_cl.config.control.climax_threshold = 100
         p_cl.config.control.climax_hold_seconds = 1
         p_cl.config.control.climax_max_per_activation = 1
-        p_cl.ctx.api_behavior["get_state"] = {"ok": True, "sleeping": False}
+        p_cl.ctx.api_behavior["get_state"] = {
+            "ok": True, "sleeping": False,
+            "euphoria": 0.0, "dysphoria": 0.0, "mood_valence": 0.0,
+        }
         await p_cl.hook_keyword_driver(message=msg("控制", session_id="lc1"))
         await p_cl._apply_intensity("lc1", 120)
         await asyncio.sleep(1.2)
@@ -1131,9 +1134,81 @@ async def main() -> None:
         r2 = await p_cl.hook_prompt_injector(session_id="lc1", extra_prompt="")
         check("climax 注入出现（第二次注入）", "乱了阵脚" in r2["modified_kwargs"]["extra_prompt"])
         adj = [(n, kw) for n, kw in p_cl.ctx.api.calls if n.endswith("adjust_mood")]
+        apex = [kw for _, kw in adj if kw.get("label") == "顶点第1次"]
+        check("顶点脉冲：−4 压力 + valence +12",
+              len(apex) == 1 and apex[0].get("stress_delta") == -4.0
+              and apex[0].get("valence") == 12.0, str(adj))
         check("climax 额度用尽 → 泄压 −15 恰一次（追踪滴灌继续）",
               sum(1 for _, kw in adj if kw.get("label") == "顶点额度用尽泄压") == 1
-              and all(kw.get("label") in ("遥控强度追踪", "顶点额度用尽泄压") for _, kw in adj), str(adj))
+              and all(kw.get("label") in ("遥控强度追踪", "顶点第1次", "顶点额度用尽泄压")
+                      for _, kw in adj), str(adj))
+
+        # 9.10b 顶点余韵：到过顶点后正常停 → valence +5；无顶点直接停 → 不发糖
+        p_ag = make_plugin(tmp)
+        ag_link = p_ag.config.linkage
+        ag_link.enabled = True
+        ag_link.write_stress = True
+        ag_link.state_ttl_seconds = 600
+        p_ag.ctx.api_behavior["get_state"] = {
+            "ok": True, "sleeping": False,
+            "euphoria": 0.0, "dysphoria": 0.0, "mood_valence": 0.0,
+        }
+        await p_ag.hook_keyword_driver(message=msg("控制", session_id="lag"))
+        p_ag._store.sessions["lag"].climax_count = 1
+        await p_ag.hook_keyword_driver(message=msg("停止控制", session_id="lag"))
+        await p_ag.hook_prompt_injector(session_id="lag", extra_prompt="")
+        ag_adj = [(n, kw) for n, kw in p_ag.ctx.api.calls if n.endswith("adjust_mood")]
+        stop = [kw for _, kw in ag_adj if kw.get("label") == "玩具停下泄压"]
+        check("余韵：到过顶点后停下 → −15 压力 + valence +5",
+              len(stop) == 1 and stop[0].get("stress_delta") == -15.0
+              and stop[0].get("valence") == 5.0, str(ag_adj))
+
+        p_ng = make_plugin(tmp)
+        ng_link = p_ng.config.linkage
+        ng_link.enabled = True
+        ng_link.write_stress = True
+        ng_link.state_ttl_seconds = 600
+        p_ng.ctx.api_behavior["get_state"] = {
+            "ok": True, "sleeping": False,
+            "euphoria": 0.0, "dysphoria": 0.0, "mood_valence": 0.0,
+        }
+        await p_ng.hook_keyword_driver(message=msg("控制", session_id="lng"))
+        await p_ng.hook_keyword_driver(message=msg("停止控制", session_id="lng"))
+        await p_ng.hook_prompt_injector(session_id="lng", extra_prompt="")
+        ng_adj = [(n, kw) for n, kw in p_ng.ctx.api.calls if n.endswith("adjust_mood")]
+        ng_stop = [kw for _, kw in ng_adj if kw.get("label") == "玩具停下泄压"]
+        check("余韵：没到顶点直接停 → 只泄压、不发 valence",
+              len(ng_stop) == 1 and ng_stop[0].get("stress_delta") == -15.0
+              and "valence" not in ng_stop[0], str(ng_adj))
+
+        # 9.10c A 档：欣快/烦躁读数出文案；老 body 缺字段按中性回退
+        p_ex = make_plugin(tmp)
+        ex_link = p_ex.config.linkage
+        ex_link.enabled = True
+        ex_link.state_ttl_seconds = 600
+        p_ex.ctx.api_behavior["get_state"] = {
+            "ok": True, "sleeping": False, "energy": 100.0, "hunger": 0.0,
+            "health": 100.0, "stress": 10.0,
+            "euphoria": 70.0, "dysphoria": 70.0, "mood_valence": 20.0,
+        }
+        await p_ex.hook_keyword_driver(message=msg("控制", session_id="lex"))
+        r_ex = await p_ex.hook_prompt_injector(session_id="lex", extra_prompt="")
+        ex_inject = r_ex["modified_kwargs"]["extra_prompt"]
+        check("A 档：欣快 ≥60 追加亢奋文案", "心跳还没缓下来" in ex_inject, ex_inject[:160])
+        check("A 档：烦躁 ≥60 追加烦躁文案", "心里莫名发躁" in ex_inject, ex_inject[:160])
+        st_ex = await p_ex._body_state()
+        check("字段守卫：新字段可读", st_ex and st_ex.get("euphoria") == 70.0
+              and st_ex.get("mood_capable") is True, str(st_ex))
+
+        p_old = make_plugin(tmp)
+        old_link = p_old.config.linkage
+        old_link.enabled = True
+        old_link.state_ttl_seconds = 600
+        p_old.ctx.api_behavior["get_state"] = {"ok": True, "sleeping": False}
+        st_old = await p_old._body_state()
+        check("字段守卫：老 body 缺字段 → 0 且 mood_capable=False",
+              st_old and st_old.get("euphoria") == 0.0
+              and st_old.get("mood_capable") is False, str(st_old))
 
         # 9.11 WebUI P1：真名捕获 + webui_linkage 数据形状 + webui.json 声明
         p_ui = make_plugin(tmp)

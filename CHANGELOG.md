@@ -1,5 +1,21 @@
 # 更新日志
 
+## v1.2.0（2026-11-20）
+
+- **适配「麦麦身体」v1.3.0 情绪 API（可选增强；body < 1.3.0 行为不变）**：
+  - **只读文案**：欣快 ≥ 60 追加亢奋描写（`body_excited_text`），烦躁 ≥ 60 追加烦躁描写
+    （`body_irritable_text`）；老 body 缺字段自动回退 0。
+  - **写回心情：顶点脉冲 + 余韵 + 锯齿压力**。泄压本身不给心情，愉悦只在顶点发生：
+    - 每次顶点：`stress −4`（与滴灌形成锯齿）+ `valence = climax_valence × 0.75^(n−1)`
+      （默认 12 / 9 / 6.75）；
+    - 到过顶点后正常停下：`stress −15` + `valence +5` 余韵；
+    - 没到顶点直接停：只泄压，不发 valence；
+    - 自然超时、睡眠中：不写 valence。
+  - 新增配置：`climax_valence`(0~20)、`climax_stress_release`(-10~0)、`afterglow_valence`(0~15)、
+    `body_excited_text`、`body_irritable_text`，WebUI 同步 5 项。
+  - 适配声明：body ≥ 1.3.0（情绪部分）；body 1.2.x 及更早自动降级，其余联动照旧。
+- 离线验证 215 项全绿。
+
 ## v1.1.1（2026-11-18）
 
 - **补声明：manifest `capabilities` 增加 `custom_pages`**（纯声明，无功能变更）。

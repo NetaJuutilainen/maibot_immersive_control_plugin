@@ -27,7 +27,8 @@ BREAKER_FAIL_THRESHOLD = 3    # 连续失败次数达到该值 → 熔断
 BREAKER_OPEN_SECONDS = 300.0  # 熔断时长（秒）
 
 # get_state 字段级守卫的取值集合：缺字段/类型异常一律回退默认，防 body 未来改字段炸进钩子
-_NUM_FIELDS = ("hunger", "thirst", "energy", "health", "stress", "depression")
+_NUM_FIELDS = ("hunger", "thirst", "energy", "health", "stress", "depression",
+               "euphoria", "dysphoria", "mood_valence")
 
 
 class BodyLink:
@@ -138,7 +139,8 @@ class BodyLink:
         return state
 
     async def adjust_mood(self, stress_delta: float, label: str = "",
-                          depression_delta: float = 0.0) -> bool:
+                          depression_delta: float = 0.0,
+                          valence: float = 0.0) -> bool:
         """写入压力/心境变化。关闭/失败/熔断期 → False；调用方负责 sleeping 守卫与幂等。"""
         cfg = self._cfg()
         if not cfg.enabled:
@@ -150,6 +152,8 @@ class BodyLink:
         }
         if depression_delta:
             args["depression_delta"] = float(depression_delta)
+        if valence:
+            args["valence"] = float(valence)
         result = await self._call("adjust_mood", **args)
         return bool(isinstance(result, dict) and result.get("ok"))
 
@@ -162,8 +166,13 @@ class BodyLink:
         if not isinstance(raw, dict) or not raw.get("ok"):
             return None
         neutral = {"energy": 100.0, "health": 100.0, "hunger": 0.0,
-                   "thirst": 0.0, "stress": 0.0, "depression": 0.0}
-        state: dict[str, Any] = {"sleeping": bool(raw.get("sleeping", False))}
+                   "thirst": 0.0, "stress": 0.0, "depression": 0.0,
+                   "euphoria": 0.0, "dysphoria": 0.0, "mood_valence": 0.0}
+        state: dict[str, Any] = {
+            "sleeping": bool(raw.get("sleeping", False)),
+            # body 1.3.0+ 的 get_state 才带 euphoria；老版本不写 valence，避免白跑 RPC
+            "mood_capable": "euphoria" in raw,
+        }
         for key in _NUM_FIELDS:
             try:
                 state[key] = float(raw.get(key, neutral[key]))
