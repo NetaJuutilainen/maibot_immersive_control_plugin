@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-label="麦麦我真得控制你了 · MaiBot Immersive Control">
+  <defs>
+    <linearGradient id="immNightBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a1224"/>
+      <stop offset="55%" stop-color="#231531"/>
+      <stop offset="100%" stop-color="#2d1738"/>
+    </linearGradient>
+    <linearGradient id="eggNight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffb3d1"/>
+      <stop offset="100%" stop-color="#ec5f9b"/>
+    </linearGradient>
+    <radialGradient id="immNightGlow1" cx="0.82" cy="0.28" r="0.48">
+      <stop offset="0%" stop-color="#ec4899" stop-opacity="0.26"/>
+      <stop offset="100%" stop-color="#ec4899" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="immNightGlow2" cx="0.92" cy="0.84" r="0.36">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="immNightDots" width="30" height="30" patternUnits="userSpaceOnUse">
+      <circle cx="15" cy="15" r="1.2" fill="#f472b6" fill-opacity="0.12"/>
+    </pattern>
+    <clipPath id="immNightClip">
+      <rect x="4" y="4" width="1192" height="292" rx="20"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#immNightClip)">
+    <rect x="4" y="4" width="1192" height="292" rx="20" fill="url(#immNightBg)"/>
+    <rect x="4" y="4" width="1192" height="292" fill="url(#immNightDots)"/>
+    <rect x="4" y="4" width="1192" height="292" fill="url(#immNightGlow1)"/>
+    <rect x="4" y="4" width="1192" height="292" fill="url(#immNightGlow2)"/>
+
+    <circle cx="990" cy="150" r="158" fill="none" stroke="#f472b6" stroke-width="1" stroke-opacity="0.18" stroke-dasharray="6 6"/>
+    <circle cx="990" cy="150" r="122" fill="none" stroke="#a78bfa" stroke-width="1.2" stroke-opacity="0.24"/>
+
+    <g transform="translate(766, 176)">
+      <rect x="0" y="0" width="146" height="80" rx="14" fill="#261736" fill-opacity="0.94" stroke="#701a4a" stroke-width="1.4"/>
+      <circle cx="22" cy="22" r="5" fill="#f472b6"/>
+      <rect x="34" y="19" width="56" height="6" rx="3" fill="#fbcfe8" fill-opacity="0.65"/>
+      <rect x="104" y="19" width="26" height="6" rx="3" fill="#a78bfa"/>
+      <polyline points="16,58 34,54 48,40 62,52 78,30 94,48 110,36 130,46" fill="none" stroke="#f472b6" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="78" cy="30" r="3.2" fill="#c4b5fd"/>
+    </g>
+
+    <g transform="translate(1058, 42)">
+      <rect x="0" y="0" width="92" height="40" rx="12" fill="#261736" fill-opacity="0.94" stroke="#701a4a" stroke-width="1.4"/>
+      <circle cx="20" cy="20" r="5.5" fill="#f472b6"/>
+      <rect x="33" y="13" width="45" height="5" rx="2.5" fill="#f472b6" fill-opacity="0.85"/>
+      <rect x="33" y="23" width="30" height="4" rx="2" fill="#6b21a8"/>
+    </g>
+
+    <rect x="886" y="46" width="208" height="208" rx="44" fill="#2a193a" fill-opacity="0.9" stroke="#831843" stroke-width="2"/>
+    <g transform="translate(886, 46) scale(3.25)">
+      <ellipse cx="32" cy="52.5" rx="12.5" ry="2.6" fill="#000000" opacity="0.32"/>
+      <g fill="none" stroke="#f472b6" stroke-width="2.6" stroke-linecap="round">
+        <path d="M13.5 26 Q9.5 32 13.5 38" opacity="0.85"/>
+        <path d="M8.5 22.5 Q2.5 32 8.5 41.5" opacity="0.5"/>
+        <path d="M50.5 26 Q54.5 32 50.5 38" opacity="0.85"/>
+        <path d="M55.5 22.5 Q61.5 32 55.5 41.5" opacity="0.5"/>
+      </g>
+      <g stroke="#c4b5fd" stroke-width="2.2" stroke-linecap="round" opacity="0.9">
+        <path d="M10 12.5 v6 M7 15.5 h6"/>
+        <path d="M54 10.5 v5 M51.5 13 h5"/>
+      </g>
+      <path d="M32 11 C 38.5 11 44 19 44.5 30 C 45 40.5 39.5 49 32 49 C 24.5 49 19 40.5 19.5 30 C 20 19 25.5 11 32 11 Z" fill="url(#eggNight)" stroke="#fbcfe8" stroke-width="1.2" stroke-opacity="0.45"/>
+      <path d="M20.6 24.5 Q32 28.5 43.4 24.5" fill="none" stroke="#9d174d" stroke-width="1.6" stroke-opacity="0.55" stroke-linecap="round"/>
+      <circle cx="32" cy="17.5" r="1.8" fill="#fff3fa"/>
+      <ellipse cx="27.5" cy="20.5" rx="3.2" ry="5.6" fill="#ffffff" opacity="0.5" transform="rotate(-18 27.5 20.5)"/>
+    </g>
+
+    <g font-family="'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+      <rect x="72" y="46" width="8" height="20" rx="4" fill="#f472b6"/>
+      <text x="90" y="61" font-size="15" font-weight="600" letter-spacing="1.2" fill="#f9a8d4">MaiBot Plugin · Immersive Control</text>
+
+      <text x="72" y="128" font-size="50" font-weight="800" fill="#fdf2f8">麦麦我真得控制你了</text>
+      <text x="72" y="172" font-size="21" font-weight="500" fill="#e2d4ec">六档敏感度 · 自动爬坡曲线 · 顶点与余韵 · WebUI 遥控器</text>
+
+      <g font-size="14.5" font-weight="600" text-anchor="middle">
+        <rect x="72" y="206" width="126" height="36" rx="18" fill="#3a1936" fill-opacity="0.92" stroke="#9d174d" stroke-width="1.2"/>
+        <text x="135" y="229" fill="#fbcfe8">六档敏感度</text>
+
+        <rect x="212" y="206" width="138" height="36" rx="18" fill="#3a1936" fill-opacity="0.92" stroke="#9d174d" stroke-width="1.2"/>
+        <text x="281" y="229" fill="#fbcfe8">自动变化曲线</text>
+
+        <rect x="364" y="206" width="156" height="36" rx="18" fill="#2e1c47" fill-opacity="0.92" stroke="#6b21a8" stroke-width="1.2"/>
+        <text x="442" y="229" fill="#e9d5ff">顶点 &amp; 主动表达</text>
+
+        <rect x="534" y="206" width="162" height="36" rx="18" fill="#3a1936" fill-opacity="0.92" stroke="#9d174d" stroke-width="1.2"/>
+        <text x="615" y="229" fill="#fbcfe8">麦麦身体情绪联动</text>
+      </g>
+    </g>
+  </g>
+
+  <rect x="4" y="4" width="1192" height="292" rx="20" fill="none" stroke="#701a4a" stroke-width="2"/>
+</svg>
