@@ -363,10 +363,21 @@ async def main() -> None:
                   {"type": "at", "data": {"target_user_nickname": "麦麦"}},
                   {"type": "text", "data": " 控制"},
               ]) == "@麦麦 控制")
+        check("_text_from_raw at 后无空格自动补",
+              plugin._text_from_raw([
+                  {"type": "at", "data": {"target_user_nickname": "麦麦"}},
+                  {"type": "text", "data": "控制"},
+              ]) == "@麦麦 控制")
+        check("_text_from_raw 兼容 CQ 字符串与 mention 段",
+              plugin._text_from_raw("[CQ:at,qq=12345] 控制") == "控制"
+              and plugin._text_from_raw({"message": [
+                  {"type": "mention", "data": {"target_user_nickname": "麦麦"}},
+                  {"type": "text", "data": "控制"},
+              ]}) == "@麦麦 控制")
         check("_text_from_raw 忽略畸形段与无名 at",
               plugin._text_from_raw([
                   "junk", {"type": "at", "data": {}}, {"type": "text", "data": "td"},
-              ]) == "@td")
+              ]) == "@ td")
         m = msg("", session_id="s7", raw_message=[{"type": "text", "data": "控制"}])
         del m["processed_plain_text"]
         r = await p.hook_keyword_driver(message=m)
@@ -458,6 +469,21 @@ async def main() -> None:
         check("@ 前缀剥离后关键词命中（is_at 为 False 时兜底扫 at 段）",
               plugin._has_at({"is_at": False,
                               "raw_message": [{"type": "at", "data": {"target_user_id": "1"}}]}))
+        # 适配器不置 is_at / 给 CQ 字符串 / 用 mention 段：仍算 @ 了
+        check("_has_at 兼容 CQ 字符串与 mention 段",
+              plugin._has_at({"raw_message": "[CQ:at,qq=12345] 控制"})
+              and plugin._has_at({"raw_message": {"message": [{"type": "mention", "data": {}}]}}))
+        # @ 与关键词之间没有空格（适配器不补空格）也要触发
+        r = await p_at.hook_keyword_driver(
+            message=msg("@麦麦控制", session_id="g4", group_id="111", is_at=True))
+        check("群聊 @+关键词无空格仍触发",
+              isinstance(r, dict) and r.get("action") == "abort", str(r))
+        # 兜底不能误伤：没 @ 的「麦麦控制」、纯「@控制」都不匹配
+        r = await p_at.hook_keyword_driver(
+            message=msg("麦麦控制", session_id="g5", group_id="111"))
+        check("未 @ 的「麦麦控制」不触发", r is None, str(r))
+        check("「@控制」无昵称不匹配",
+              plugin._norm_text_strip_at("@控制", {"控制"}) == "")
         # 私聊不需要 @
         r = await p_at.hook_keyword_driver(message=msg("控制", session_id="g2"))
         check("私聊无需 @ 即可触发", isinstance(r, dict) and r.get("action") == "abort", str(r))
@@ -471,9 +497,11 @@ async def main() -> None:
         # 剥 @ 前缀的归一化单测
         check("_norm_text_strip_at 剥 @昵称",
               plugin._norm_text_strip_at("@麦麦 控制") == "控制"
-              and plugin._norm_text_strip_at("控制") == "控制"
+              and plugin._norm_text_strip_at("控制") == "控制")
+        check("_norm_text_strip_at 无空格按关键词结尾兜底",
+              plugin._norm_text_strip_at("@麦麦控制", {"控制"}) == "控制"
               and plugin._norm_text_strip_at("@麦麦控制") == "",
-              plugin._norm_text_strip_at("@麦麦 控制"))
+              plugin._norm_text_strip_at("@麦麦控制", {"控制"}))
 
     print("== 4b. 敏感度指令 / 六档 / 自动模式 / 阈值触发 ==")
     patterns = {c["name"]: c["pattern"] for c in commands}

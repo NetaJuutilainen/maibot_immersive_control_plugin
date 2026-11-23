@@ -17,6 +17,7 @@ import asyncio
 import importlib.util
 import json
 import random
+import re
 import sys
 import time
 from pathlib import Path
@@ -160,24 +161,41 @@ def _norm_text(raw: Any) -> str:
     return text
 
 
-def _norm_text_strip_at(raw: Any) -> str:
-    """在归一化基础上再剥掉"@昵称"前缀（@ 与昵称间、昵称与关键词间可能有空格）。"""
+def _norm_text_strip_at(raw: Any, keywords: Any = ()) -> str:
+    """在归一化基础上剥掉"@昵称"前缀（@ 与昵称间、昵称与关键词间可能有空格）。
+
+    无空格形态（"@麦麦控制"）在文本上分不清昵称与关键词，只在 keywords 里有
+    关键词正好收尾时才接受——部分适配器 @ 后不补空格，靠这条兜底。"""
     text = _norm_text(raw)
     if text.startswith("@"):
+        if text[1:2].isspace():  # 无名 at（"@ 控制"）：@ 后直接是分隔空白
+            return text[1:].strip()
         tail = text[1:].strip()
         if not tail:
             return ""
-        if " " in tail or "\u3000" in tail:
+        if any(ch.isspace() for ch in tail):
             return tail.split(None, 1)[1].strip()
-        return ""  # 形如"@麦麦控制"无法区分昵称与关键词，不匹配（需在 @ 后加空格）
+        for kw in keywords:
+            kw = _norm_text(kw)
+            if kw and len(tail) > len(kw) and tail.endswith(kw):
+                return kw
+        return ""  # "@麦麦控制"且结尾对不上任何关键词，不匹配
     return text
 
 
-def _text_from_raw(raw: Any) -> str:
-    """processed_plain_text 缺失时从 raw_message 消息段拼文本（仅用于关键词匹配）。
+_CQ_AT = re.compile(r"\[CQ:at,[^\]]*\]", re.IGNORECASE)
 
-    宿主在 before_process 钩子之后才生成 processed_plain_text，该字段能否读到
-    取决于适配器是否预填；拼法与 NapCat 系适配器一致（text 直取、at 渲染为 @昵称）。"""
+
+def _text_from_raw(raw: Any) -> str:
+    """processed_plain_text 缺失时从 raw_message 拼文本（仅用于关键词匹配）。
+
+    兼容消息段数组、OneBot 的 {"message": [...]} 包装与 CQ 字符串
+    （[CQ:at,...] 直接删掉，正文原样留下）；at 段后自动补空格，
+    避免拼成"@麦麦控制"导致关键词剥不出来。"""
+    if isinstance(raw, dict):
+        raw = raw.get("message", raw.get("raw_message"))
+    if isinstance(raw, str):
+        return _CQ_AT.sub("", raw).strip()
     parts: list[str] = []
     for seg in raw or []:
         if not isinstance(seg, dict):
@@ -185,8 +203,11 @@ def _text_from_raw(raw: Any) -> str:
         stype = str(seg.get("type") or "")
         data = seg.get("data")
         if stype == "text":
-            parts.append(data if isinstance(data, str) else str((data or {}).get("text") or ""))
-        elif stype == "at":
+            text = data if isinstance(data, str) else str((data or {}).get("text") or "")
+            if parts and parts[-1].startswith("@") and text and not text[0].isspace():
+                parts.append(" ")
+            parts.append(text)
+        elif stype in ("at", "mention"):
             name = ""
             if isinstance(data, dict):
                 name = str(
@@ -199,19 +220,27 @@ def _text_from_raw(raw: Any) -> str:
     return "".join(parts).strip()
 
 
-def _keyword_candidates(raw: Any) -> set[str]:
-    """@消息既可能是"@麦麦 控制"也可能是裸"控制"（私聊），返回两个候选。"""
-    candidates = {_norm_text(raw), _norm_text_strip_at(raw)}
+def _keyword_candidates(raw: Any, keywords: Any = ()) -> set[str]:
+    """@消息既可能是"@麦麦 控制"也可能是裸"控制"（私聊），返回候选关键词。"""
+    candidates = {_norm_text(raw), _norm_text_strip_at(raw, keywords)}
     candidates.discard("")
     return candidates
 
 
 def _has_at(message: dict) -> bool:
-    """是否 @ 了机器人：优先信适配器置位的 is_at；否则兜底扫 raw_message 的 at 段。"""
+    """是否 @ 了机器人：优先信适配器置位的 is_at；否则兜底扫 raw_message。
+
+    兜底兼容消息段数组、{"message": [...]} 包装、CQ 字符串与 mention 段。"""
     if message.get("is_at"):
         return True
-    for seg in message.get("raw_message") or []:
-        if isinstance(seg, dict) and seg.get("type") == "at":
+    raw = message.get("raw_message")
+    if isinstance(raw, dict):
+        raw = raw.get("message", raw.get("raw_message"))
+    if isinstance(raw, str):
+        return "[cq:at," in raw.lower()
+    for seg in raw or []:
+        stype = str(seg.get("type") or "") if isinstance(seg, dict) else str(getattr(seg, "type", "") or "")
+        if stype in ("at", "mention"):
             return True
     return False
 
@@ -767,10 +796,6 @@ class ImmersiveControlPlugin(MaiBotPlugin):
         if message.get("is_notify"):
             return None
 
-        # @ 门槛：群聊要求 @bot（私聊始终放行）
-        if cfg.require_at and _is_group_message(message) and not _has_at(message):
-            return None
-
         raw_text = message.get("processed_plain_text")
         if not isinstance(raw_text, str) or not raw_text.strip():
             raw_text = _text_from_raw(message.get("raw_message"))
@@ -780,12 +805,24 @@ class ImmersiveControlPlugin(MaiBotPlugin):
 
         enter_words = {_norm_text(w) for w in (cfg.enter_keywords or []) if str(w).strip()}
         exit_words = {_norm_text(w) for w in (cfg.exit_keywords or []) if str(w).strip()}
+        words = enter_words | exit_words
 
-        candidates = _keyword_candidates(raw_text)
-        if not candidates & (enter_words | exit_words):
+        candidates = _keyword_candidates(raw_text, words)
+        hit_words = candidates & words
+
+        # @ 门槛：群聊要求 @bot（私聊始终放行）
+        if cfg.require_at and _is_group_message(message) and not _has_at(message):
+            # 疑似关键词却读不到 @：留一行日志，避免再次「完全静默」无从排查
+            if hit_words:
+                self.ctx.logger.warning(
+                    "群聊疑似关键词但未识别到 @（适配器未提供 at 信息？）text=%r", raw_text,
+                )
+            return None
+
+        if not hit_words:
             return None  # 非关键词消息完全旁路，零开销
-        hit_enter = bool(candidates & enter_words)
-        hit_exit = bool(candidates & exit_words)
+        hit_enter = bool(hit_words & enter_words)
+        hit_exit = bool(hit_words & exit_words)
 
         user_id = _extract(message, "message_info", "user_info", "user_id")
         session_id = str(message.get("session_id") or "")

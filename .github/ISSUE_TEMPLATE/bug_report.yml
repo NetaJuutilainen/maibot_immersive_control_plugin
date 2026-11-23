@@ -1,0 +1,118 @@
+name: 🐛 触发异常 / Bug 报告
+description: 关键词没反应、行为不对、报错——按表单填，一次就能定位
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **先自查 30 秒（能省一轮往返）：**
+        1. 群聊里发 `@麦麦 td`（`@` 后留一个空格，`td` 是默认关键词）；
+        2. 私聊发 `td` 做对照；
+        3. 群里还是没反应 → 把配置里「群聊中必须 @机器人」关掉（`require_at=false`），
+           群里直接发 `控制`：能触发 = @ 段识别问题；不能触发 = 关键词/会话问题。
+
+        > 插件版本低于 **1.2.1** 时，群聊 `@` 与关键词之间没有空格 / 适配器只给 CQ 字符串
+        > 或 `mention` 段会识别不了，请先升级再报。
+
+  - type: input
+    id: plugin_version
+    attributes:
+      label: 插件版本
+      description: 插件列表 / 市场页可见
+      placeholder: "例如 1.2.1"
+    validations:
+      required: true
+
+  - type: input
+    id: host_version
+    attributes:
+      label: MaiBot 宿主版本
+      placeholder: "例如 1.4.8"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: adapter
+    attributes:
+      label: QQ 适配器
+      options:
+        - NapCat
+        - SnowLuma
+        - 官方 QQ 适配器
+        - 其他 / 自行接入
+    validations:
+      required: true
+
+  - type: input
+    id: adapter_version
+    attributes:
+      label: 适配器版本
+      description: 选填，但很有用（不同版本的消息结构不一样）
+      placeholder: "例如 NapCat 4.x / SnowLuma 2.4.2"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scene
+    attributes:
+      label: 出现场景
+      options:
+        - 仅群聊
+        - 仅私聊
+        - 群聊和私聊都有
+        - 其他（行为不对 / 报错，与触发无关）
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 一步步写，从「在什么会话里」开始
+      placeholder: |
+        1. 在群 xxx 里发送「@麦麦 控制」
+        2. ……
+        3. 期望：进入被遥控状态；实际：没有任何反应
+    validations:
+      required: true
+
+  - type: textarea
+    id: message_shape
+    attributes:
+      label: 触发消息的原文形态
+      description: 重点：@ 与关键词之间**有没有空格**、@ 的是不是机器人本身、关键词有没有改过（默认 控制 / 遥控 / 我要控制你了 / td）
+      placeholder: |
+        实际发送：@麦麦控制（@ 后没有空格）
+        关键词：默认
+        @ 的是机器人本身：是
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: 相关配置
+      description: 群聊里发 `/imm_config` 把输出贴上来（或 WebUI 截图）。至少注明 require_at、enter_keywords、admin_only_mode
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: 触发前后 1~2 分钟内，宿主日志里含「沉浸式遥控」的行。**没有这类日志也是有效信息，请写「无」**（v1.2.1 起「群里像关键词但读不到 @」会打 warning）
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 已升级到最新插件版本，并重启 / 重载过插件
+          required: true
+        - label: 已按上面的「自查 30 秒」试过 @ 后加空格，以及关闭 require_at 的对照
+          required: true

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 使用说明 / 常见问题
+    url: https://github.com/NetaJuutilainen/maibot_immersive_control_plugin#readme
+    about: 关键词规则、@ 要求、配置项说明都在 README
