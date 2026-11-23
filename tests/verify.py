@@ -245,6 +245,14 @@ async def main() -> None:
     rendered = plugin.render_template(cfg.prompt.enter_template, "测试玩具", 77, 180)
     check("占位符替换正确", "测试玩具" in rendered and "77" in rendered
           and "{item_name}" not in rendered and "{" not in rendered, rendered)
+    # 插件配置页只读 json_schema_extra.label，缺了会回退成英文字段名（1.4.x 实测）
+    missing_labels = []
+    for sec in (cfg.plugin, cfg.control, cfg.prompt, cfg.linkage):
+        for name, fld in type(sec).model_fields.items():
+            if not (fld.json_schema_extra or {}).get("label"):
+                missing_labels.append(f"{type(sec).__name__}.{name}")
+    check("所有配置字段都有中文 label（配置页不回退英文字段名）",
+          not missing_labels, str(missing_labels))
 
     print("== 4. 命令正则（re.search 语义） ==")
     patterns = {c["name"]: c["pattern"] for c in commands}
