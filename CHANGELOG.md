@@ -18,7 +18,7 @@
   空白 issue 已关闭。
 - **修复：配置页字段名显示为英文**（`react_on_trigger`、`stealth_phrases` …）。
   当前宿主配置页只读字段 schema 的 `label` / `hint`，**不读 `description`**；
-  此前只写 `description`，标签回退成字段名。现为全部 67 个字段补中文 `label`
+  此前只写 `description`，标签回退成字段名。现为全部 69 个字段补中文 `label`
   （`hint` 沿用原说明），并新增回归断言：任一可见字段缺 `label` 直接 FAIL。
 
 ## v1.2.0（2026-11-20）
