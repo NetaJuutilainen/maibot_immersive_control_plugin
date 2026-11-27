@@ -341,9 +341,12 @@ async def main() -> None:
         r = await p.hook_keyword_driver(message=msg("控制", session_id="s1"))
         check("进入关键词 → abort", isinstance(r, dict) and r.get("action") == "abort", str(r))
         check("激活瞬间未发消息（静默）", p.ctx.send.sent == [], str(p.ctx.send.sent))
-        # 重复进入不再提示
+        # 激活中复用进入关键词（升档关键词留空时）→ 升一档（50→70）而非重激活
         r = await p.hook_keyword_driver(message=msg("td", session_id="s1"))
-        check("激活中再触发仍 abort 且静默", isinstance(r, dict) and r.get("action") == "abort")
+        check("激活中升档词留空复用进入词 → 升档 abort",
+              isinstance(r, dict) and r.get("action") == "abort"
+              and p._effective_sensitivity("s1") == 70, str((r, p._effective_sensitivity("s1"))))
+        p.ctx.send.sent.clear()
         # 冷却提示
         p._store.clear()
         p._store.get("s2").cooldown_end = time.time() + 20
@@ -573,7 +576,10 @@ async def main() -> None:
               str(p_i.ctx.maisaka.proactive_calls))
         await p_i.hook_prompt_injector(session_id="si", extra_prompt="")
         check("同一次激活内不重复触发", len(p_i.ctx.maisaka.proactive_calls) == 1)
-        # 重新激活 → 允许再次触发
+        # 退出后（冷却结束）重新激活 → 允许再次触发阈值主动表达
+        await p_i.hook_keyword_driver(message=msg("停止", session_id="si"))
+        p_i._store.prompt_state("si", p_i._control())
+        p_i._store.sessions["si"].cooldown_end = 0.0
         await p_i.hook_keyword_driver(message=msg("控制", session_id="si"))
         await p_i._maybe_proactive("si")
         check("重新激活后可再次触发", len(p_i.ctx.maisaka.proactive_calls) == 2)
@@ -801,7 +807,10 @@ async def main() -> None:
             if "乱了阵脚" in r["modified_kwargs"]["extra_prompt"]:
                 fired += 1
         check("上限设为 1：只触发 1 次", fired == 1, str(fired))
-        # 重新激活后次数重置
+        # 退出后（冷却结束）重新激活后次数重置
+        await p_m2.hook_keyword_driver(message=msg("停止", session_id="sn2"))
+        p_m2._store.prompt_state("sn2", p_m2._control())
+        p_m2._store.sessions["sn2"].cooldown_end = 0.0
         await p_m2.hook_keyword_driver(message=msg("控制", session_id="sn2"))
         await p_m2.hook_prompt_injector(session_id="sn2", extra_prompt="")  # 开始计时
         await asyncio.sleep(1.3)
@@ -1447,6 +1456,173 @@ async def main() -> None:
         await p_ml.webui_linkage_config(patch=json.dumps({"control.state_duration": 240}))
         check("损坏 TOML 保护：校验失败时不覆盖磁盘文件",
               bad_file.read_text(encoding="utf-8") == bad_raw)
+
+        # 9.13c 无斜杠加减档、六档直达、Unicode Emoji、状态门禁、25句随机池与主动回复开关
+        p_tier = make_plugin(
+            tmp,
+            admin_ids=["88888"],
+            tier_down_keywords=["降档", "❄️"],
+            tier_jump_1_keywords=["一档"],
+            tier_jump_2_keywords=["二档"],
+            tier_jump_3_keywords=["三档"],
+            tier_jump_4_keywords=["四档"],
+            tier_jump_5_keywords=["五档"],
+            tier_jump_6_keywords=["六档", "🔥"],
+        )
+        p_tier.ctx = FakeCtx(tmp)
+        check("隐蔽语句池默认扩充至 25 句且互异",
+              len(p_tier.config.control.stealth_phrases) == 25
+              and len(set(p_tier.config.control.stealth_phrases)) == 25,
+              str(len(p_tier.config.control.stealth_phrases)))
+
+        # 未激活时：升/降/直达不生效（直接放行）
+        check("未激活时降档关键词放行",
+              await p_tier.hook_keyword_driver(message=msg("降档", session_id="tk1")) is None)
+        check("未激活时直达档位放行",
+              await p_tier.hook_keyword_driver(message=msg("🔥", session_id="tk1")) is None)
+
+        # 冷却中：升/降/直达同样放行，只有进入词提示冷却
+        p_tier._store.get("tk_cd").cooldown_end = time.time() + 30
+        check("冷却中降档关键词放行",
+              await p_tier.hook_keyword_driver(message=msg("降档", session_id="tk_cd")) is None)
+        check("冷却中直达关键词放行",
+              await p_tier.hook_keyword_driver(message=msg("🔥", session_id="tk_cd")) is None)
+
+        # 激活后：默认 tier_up_keywords 留空 → 复用进入词「控制」升档且不重置计时/顶点计数
+        await p_tier.hook_keyword_driver(message=msg("控制", session_id="tk1"))
+        s_tk = p_tier._store.sessions["tk1"]
+        s_tk.started_ts = 1000.0
+        p_tier.config.control.state_duration = 9999999999  # 固定不超时
+        s_tk.climax_count = 2
+        p_tier._store.set_auto("tk1")
+        r_up1 = await p_tier.hook_keyword_driver(message=msg("控制", session_id="tk1"))
+        check("升档留空复用进入词：退出自动模式并 +20（30→50），不重置计时与 climax_count",
+              isinstance(r_up1, dict) and r_up1.get("action") == "abort"
+              and s_tk.auto_mode is False
+              and p_tier._effective_sensitivity("tk1") == 50
+              and s_tk.started_ts == 1000.0 and s_tk.climax_count == 2
+              and "50/120" in p_tier.ctx.send.sent[-1][0],
+              str((p_tier._effective_sensitivity("tk1"), s_tk.started_ts, s_tk.climax_count)))
+
+        # 独立配置 tier_up_keywords 后，激活态再发「控制」不再生效
+        p_tier.config.control.tier_up_keywords = ["加档", "⬆️"]
+        r_reenter = await p_tier.hook_keyword_driver(message=msg("控制", session_id="tk1"))
+        check("已设独立升档词后，激活态进入词直接放行不升档",
+              r_reenter is None and p_tier._effective_sensitivity("tk1") == 50, str(r_reenter))
+        await p_tier.hook_keyword_driver(message=msg("加档", session_id="tk1"))
+        check("独立升档词 +20（50→70）", p_tier._effective_sensitivity("tk1") == 70)
+        await p_tier.hook_keyword_driver(message=msg("降档", session_id="tk1"))
+        check("降档词 -20（70→50）", p_tier._effective_sensitivity("tk1") == 50)
+
+        # 六档直达（10/30/50/70/90/110）
+        for kw, expect_v in (("一档", 10), ("二档", 30), ("三档", 50),
+                             ("四档", 70), ("五档", 90), ("六档", 110)):
+            p_tier._store.set_auto("tk1")
+            await p_tier.hook_keyword_driver(message=msg(kw, session_id="tk1"))
+            check(f"直达档位 {kw} → {expect_v}/120 且退出自动模式",
+                  p_tier._effective_sensitivity("tk1") == expect_v
+                  and p_tier._store.sessions["tk1"].auto_mode is False,
+                  str(p_tier._effective_sensitivity("tk1")))
+
+        # Unicode Emoji（含 \ufe0f 变体归一化与群聊 @麦麦🔥 无空格）
+        p_tier.config.control.enter_keywords = ["❤️", "控制"]
+        p_tier.config.control.tier_up_keywords = ["⬆️"]
+        p_tier.config.control.require_at = True
+        r_em1 = await p_tier.hook_keyword_driver(
+            message=msg("❤", session_id="tk_em", group_id="g9", is_at=True))
+        check("群聊 @+Emoji（❤ 无\\ufe0f 匹配 ❤️ 配置）激活",
+              isinstance(r_em1, dict) and r_em1.get("action") == "abort", str(r_em1))
+        r_em2 = await p_tier.hook_keyword_driver(
+            message=msg("@麦麦⬆", session_id="tk_em", group_id="g9", is_at=True))
+        check("群聊 @麦麦⬆ 无空格升档（50→70）",
+              isinstance(r_em2, dict) and p_tier._effective_sensitivity("tk_em") == 70)
+        r_em3 = await p_tier.hook_keyword_driver(
+            message=msg("@麦麦 🔥", session_id="tk_em", group_id="g9", is_at=True))
+        check("群聊 @麦麦 🔥 直达 6 档（110）",
+              isinstance(r_em3, dict) and p_tier._effective_sensitivity("tk_em") == 110)
+        r_em_noat = await p_tier.hook_keyword_driver(
+            message=msg("🔥", session_id="tk_em", group_id="g9", is_at=False))
+        check("群聊未 @ 的 Emoji 不触发", r_em_noat is None)
+
+        # 隐蔽模式 + 调档：从 25 句池随机回复，不露数值
+        p_tier.config.control.stealth_mode = True
+        p_tier.ctx.send.sent.clear()
+        await p_tier.hook_keyword_driver(message=msg("❄️", session_id="tk1"))
+        check("隐蔽模式降档发送随机日常短句",
+              len(p_tier.ctx.send.sent) == 1
+              and p_tier.ctx.send.sent[0][0] in p_tier.config.control.stealth_phrases,
+              str(p_tier.ctx.send.sent))
+
+        # 调档主动触发 LLM 回复开关（react_on_tier_change=True）：不发短句、不与阈值双发、边界不浪费
+        p_pr = make_plugin(
+            tmp,
+            admin_ids=["88888"],
+            proactive_threshold=80,
+            react_on_tier_change=True,
+            stealth_mode=True,
+            tier_up_keywords=["加档"],
+            tier_down_keywords=["减档"],
+            tier_jump_6_keywords=["六档"],
+        )
+        p_pr.ctx = FakeCtx(tmp)
+        await p_pr.cmd_intensity(stream_id="tp1", user_id="88888", matched_groups={"value": "70"})
+        check("未激活时 /强度 仍发回执、不触发 LLM",
+              len(p_pr.ctx.maisaka.proactive_calls) == 0 and len(p_pr.ctx.send.sent) == 1)
+        p_pr.ctx.send.sent.clear()
+        await p_pr.hook_keyword_driver(message=msg("控制", session_id="tp1"))
+        r_pr = await p_pr.hook_keyword_driver(message=msg("加档", session_id="tp1"))  # 70→90，同时跨阈值 80
+        check("react_on_tier_change=True：变动直发 1 次主动 LLM（与阈值去重、不发固定短句）",
+              isinstance(r_pr, dict) and r_pr.get("action") == "abort"
+              and p_pr._effective_sensitivity("tp1") == 90
+              and len(p_pr.ctx.maisaka.proactive_calls) == 1
+              and p_pr.ctx.send.sent == [],
+              str((p_pr.ctx.maisaka.proactive_calls, p_pr.ctx.send.sent)))
+        # /强度 120 也会触发一次主动 LLM
+        await p_pr.cmd_intensity(stream_id="tp1", user_id="88888", matched_groups={"value": "max"})
+        check("react_on_tier_change=True：/强度 max 变 120 再触发一次 LLM（无短句）",
+              len(p_pr.ctx.maisaka.proactive_calls) == 2 and p_pr.ctx.send.sent == [])
+        # 已在 120 边界再升档：未变动 → 不调 LLM，走普通回执
+        await p_pr.hook_keyword_driver(message=msg("加档", session_id="tp1"))
+        check("边界未变动（120 再升）：不触发 LLM，走 _feedback",
+              len(p_pr.ctx.maisaka.proactive_calls) == 2 and len(p_pr.ctx.send.sent) == 1)
+        # 待退出状态：调档与进入词均放行
+        await p_pr.hook_keyword_driver(message=msg("停止", session_id="tp1"))
+        check("待退出态降档关键词放行",
+              await p_pr.hook_keyword_driver(message=msg("减档", session_id="tp1")) is None)
+        # 超时未回话也会先惰性结算再允许重新激活
+        p_exp = make_plugin(tmp, state_duration=10, cooldown_seconds=5, tier_down_keywords=["减档"])
+        p_exp.ctx = FakeCtx(tmp)
+        await p_exp.hook_keyword_driver(message=msg("控制", session_id="texp"))
+        p_exp._store.sessions["texp"].started_ts = time.time() - 60
+        check("超时未回话后降档词先结算为未激活并放行",
+              await p_exp.hook_keyword_driver(message=msg("减档", session_id="texp")) is None)
+        r_re = await p_exp.hook_keyword_driver(message=msg("控制", session_id="texp"))
+        check("超时+冷却均已过时进入词可立即重新激活",
+              isinstance(r_re, dict) and r_re.get("action") == "abort"
+              and p_exp._store.is_active("texp", p_exp._control()))
+
+        # admin_only_mode 对升降/直达关键词生效
+        p_adm = make_plugin(tmp, admin_only_mode=True, admin_ids=["88888"],
+                            tier_down_keywords=["降档"], tier_jump_4_keywords=["四档"])
+        p_adm.ctx = FakeCtx(tmp)
+        await p_adm.hook_keyword_driver(message=msg("控制", session_id="ta1", user_id="88888"))
+        check("admin_only_mode：非管理员升/降/直达静默忽略",
+              await p_adm.hook_keyword_driver(message=msg("四档", session_id="ta1", user_id="10001")) is None
+              and p_adm._effective_sensitivity("ta1") == 50)
+        await p_adm.hook_keyword_driver(message=msg("四档", session_id="ta1", user_id="88888"))
+        check("admin_only_mode：管理员可直达 70", p_adm._effective_sensitivity("ta1") == 70)
+
+        # WebUI 允许留空保存 tier_*_keywords 与保存 Emoji 列表
+        r_empty = await p_ml.webui_linkage_config(patch=json.dumps({
+            "control.tier_up_keywords": "",
+            "control.tier_down_keywords": "降档\n❄️",
+            "control.react_on_tier_change": True,
+        }))
+        check("WebUI 允许留空保存升档词并保存 Emoji 列表",
+              r_empty.get("ok") and not r_empty.get("rejected")
+              and p_ml.config.control.tier_up_keywords == []
+              and p_ml.config.control.tier_down_keywords == ["降档", "❄️"]
+              and p_ml.config.control.react_on_tier_change is True, str(r_empty))
 
         # 9.13b 重载恢复 + tick 以 store 为准 + 冷却守卫
         p_rs = make_plugin(tmp)

@@ -266,11 +266,22 @@
     ]},
     { id: "control-climax", title: "强度与顶点（自动档 / 阈值 / 越限）", fields: [
       { sec: "prompt", k: "sensitivity", t: "num", label: "全局敏感度 0-100", min: 0, max: 100 },
+      { sec: "control", k: "react_on_tier_change", t: "bool", label: "调档立即触发主动回复" },
       { sec: "control", k: "proactive_threshold", t: "num", label: "阈值主动表达（0=关）", min: 0, max: 120 },
       { sec: "control", k: "auto_speed_per_minute", t: "num", label: "自动模式速度（点/分）", min: 1, max: 120 },
       { sec: "control", k: "climax_threshold", t: "num", label: "越限触发阈值（0=关）", min: 0, max: 120 },
       { sec: "control", k: "climax_hold_seconds", t: "num", label: "越限持续秒数", min: 1, max: 600 },
       { sec: "control", k: "climax_max_per_activation", t: "num", label: "每次激活最多触发次数", min: 1, max: 99 }
+    ]},
+    { id: "control-tier-keys", title: "档位快捷键（升/降档与六档直达，支持 Emoji）", fields: [
+      { sec: "control", k: "tier_up_keywords", t: "list", label: "升档关键词（+20；留空则复用进入关键词）", wide: true, rows: 2 },
+      { sec: "control", k: "tier_down_keywords", t: "list", label: "降档关键词（-20；留空禁用）", wide: true, rows: 2 },
+      { sec: "control", k: "tier_jump_1_keywords", t: "list", label: "直达 1 档（10/120 · 0-20 档）", wide: true, rows: 2 },
+      { sec: "control", k: "tier_jump_2_keywords", t: "list", label: "直达 2 档（30/120 · 20-40 档）", wide: true, rows: 2 },
+      { sec: "control", k: "tier_jump_3_keywords", t: "list", label: "直达 3 档（50/120 · 40-60 档）", wide: true, rows: 2 },
+      { sec: "control", k: "tier_jump_4_keywords", t: "list", label: "直达 4 档（70/120 · 60-80 档）", wide: true, rows: 2 },
+      { sec: "control", k: "tier_jump_5_keywords", t: "list", label: "直达 5 档（90/120 · 80-100 档）", wide: true, rows: 2 },
+      { sec: "control", k: "tier_jump_6_keywords", t: "list", label: "直达 6 档（110/120 · 100-120 档）", wide: true, rows: 2 }
     ]},
     { id: "prompt", title: "提示词与文案（玩具名 / 六档说明 / 模板）", fields: [
       { sec: "prompt", k: "item_name", t: "text", label: "玩具名称 {item_name}", wide: true },
@@ -350,7 +361,7 @@
         if (f.t === "list") {
           var txt = Array.isArray(v) ? v.join("\n") : (v || "");
           return '<label class="wide"><span>' + esc(f.label) + "</span>" +
-            '<textarea ' + attrs + ' rows="4">' + esc(txt) + "</textarea></label>";
+            '<textarea ' + attrs + ' rows="' + (f.rows || 4) + '">' + esc(txt) + "</textarea></label>";
         }
         if (f.t === "area") {
           return '<label class="wide"><span>' + esc(f.label) + "</span>" +

@@ -10,7 +10,7 @@
 
   <!-- Badges -->
   <p>
-    <img src="https://img.shields.io/badge/Version-1.2.0-d81b60?style=flat-square&labelColor=1e293b" alt="Version 1.2.0">
+    <img src="https://img.shields.io/badge/Version-1.2.3-d81b60?style=flat-square&labelColor=1e293b" alt="Version 1.2.3">
     <img src="https://img.shields.io/badge/MaiBot-%3E%3D1.3.0-9575cd?style=flat-square&labelColor=1e293b" alt="MaiBot >= 1.3.0">
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e?style=flat-square&labelColor=1e293b" alt="License: MIT"></a>
     <img src="https://img.shields.io/github/stars/NetaJuutilainen/maibot_immersive_control_plugin?label=Stars&color=eab308&style=flat-square&labelColor=1e293b" alt="Stars">
@@ -20,7 +20,7 @@
   <p>
     给麦麦装上一个"特殊装置"，然后遥控它 —— <b>六档敏感度</b> · <b>自动变化节奏</b> · <b>阈值主动表达</b> · <b>顶点与隐蔽反馈</b><br/>
     全部参数可在 <b>WebUI「麦麦遥控器」</b>实时配置，可选与 <b>麦麦身体</b> 联动<br/>
-    <sub>移植重构自 <a href="https://github.com/muyouzhi6/astrbot_plugin_immersive_control">astrbot_plugin_immersive_control</a>（木有知 / Zhalslar，MIT）· 当前版本 <b>1.2.0</b></sub>
+    <sub>移植重构自 <a href="https://github.com/muyouzhi6/astrbot_plugin_immersive_control">astrbot_plugin_immersive_control</a>（木有知 / Zhalslar，MIT）· 当前版本 <b>1.2.3</b></sub>
   </p>
 
   <!-- Quick Navigation -->
@@ -60,8 +60,8 @@
 ## 🎮 玩法与流程
 
 1. 群聊里 **@麦麦 + 进入关键词**（默认 `控制` / `遥控` / `我要控制你了` / `td`，去掉首尾空白后完全一致才触发；`@` 与关键词之间有没有空格都认（v1.2.1 起）；私聊无需 `@`）→ 该会话进入"被遥控"状态，默认静默激活，可在配置中改为触发瞬间立刻回应；
-2. 之后麦麦的**每一条回复**前都会注入状态提示词：祂表面上还在正常聊天，但会漏出破绽——慌乱、结巴、分神，强度由敏感度档位决定；
-3. 命中**退出关键词**（默认 `停止` / `停止控制` / `结束` / `结束控制`）→ 静默结束，下一条回复注入一次收尾提示词；或到达 `state_duration`（默认 180 秒）自动结束；
+2. 之后麦麦的**每一条回复**前都会注入状态提示词：祂表面上还在正常聊天，但会漏出破绽——慌乱、结巴、分神，强度由敏感度档位决定；激活期间支持无斜杠的**升/降档（`±20`）与六档直达关键词**（含 Unicode Emoji；升档关键词留空时复用进入关键词）；
+3. 命中**退出关键词**（默认 `停止` / `停止控制` / `结束` / `结束控制`）→ 静默结束，下一条回复注入一次收尾提示词；或到达 `state_duration`（默认 180 秒）自动结束；未激活时升/降档、直达与退出关键词均不拦截普通聊天；
 4. 结束后进入冷却（默认 30 秒），冷却期触发会收到提示（隐蔽模式下不可察觉）。
 
 > 道具名称默认叫"特殊装置"，你可以在配置里自定义为任何你想要的名称。
@@ -99,7 +99,7 @@ flowchart TD
 
 ### 控制机制
 
-- **指令调档**：`/强度 <0-120>`（会话级覆盖，持久化），`/强度 max` = 120，`/强度 全局` 恢复跟随全局，不带参数查询当前值与计时状态；范围外直接拒绝；
+- **指令与关键词调档**：`/强度 <0-120>`（会话级覆盖，持久化），`/强度 max` = 120，`/强度 全局` 恢复跟随全局，不带参数查询当前值与计时状态；激活期间也可用无斜杠的升/降档关键词（`±20`）或六档直达关键词（`10 / 30 / 50 / 70 / 90 / 110`，默认留空可配，支持 Unicode Emoji），均自动退出自动模式；可开启 `react_on_tier_change` 在调档变动时立即触发一次 LLM 主动回复；
 - **自动模式**：`/强度 自动` → 从 30 爬升到 100（约 3.5 分钟），随后在 50↔100 之间往复（每程约 2.5 分钟），速度由 `auto_speed_per_minute`（默认 20 点/分钟）控制；
 - **阈值主动表达**（`proactive_threshold`，默认 80，0 = 关闭）：敏感度达到阈值时，麦麦自主发起一次主动表达（每次激活限一次）；
 - **顶点效果**（`climax_threshold` 默认 100 + `climax_hold_seconds` 默认 20 秒）：敏感度保持在阈值以上达到时长后，下一次回复注入一次"彻底招架不住、大脑一片空白"的描写（`climax_template` 可改），并以 `climax_emoji`（默认 😳，留空关闭）收尾作为暗号；每次激活最多触发 `climax_max_per_activation` 次（默认 3），中途跌破阈值重新计时。

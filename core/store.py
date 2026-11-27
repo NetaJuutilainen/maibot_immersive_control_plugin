@@ -112,11 +112,29 @@ class SessionStore:
     def active_count(self) -> int:
         return sum(1 for s in self.sessions.values() if s.active)
 
+    def settle_expired(self, key: str, cfg, now: float | None = None) -> Session | None:
+        """若激活会话已超过 state_duration 且尚未进入退出态，惰性结算为结束并进入冷却。"""
+        now = time.time() if now is None else now
+        s = self.sessions.get(key)
+        if s is not None and s.active and not s.exit_ts and now - s.started_ts >= cfg.state_duration:
+            expired_at = s.started_ts + cfg.state_duration
+            s.active = False
+            s.started_ts = 0.0
+            s.cooldown_end = expired_at + max(0, int(cfg.cooldown_seconds))
+            self._changed()
+        return s
+
+    def is_active(self, key: str, cfg, now: float | None = None) -> bool:
+        """判断会话当前是否处于激活中（已先惰性结算超时；待退出期间不算激活中）。"""
+        s = self.settle_expired(key, cfg, now=now)
+        return bool(s is not None and s.active and s.exit_ts <= 0)
+
     # ---- 状态机 ----
 
     def try_activate(self, key: str, cfg, now: float | None = None) -> tuple[str, int]:
         """尝试激活会话。返回 (结果, 提示秒数)：COOLDOWN 时为剩余冷却秒数，其余为 0。"""
         now = time.time() if now is None else now
+        self.settle_expired(key, cfg, now=now)
         s = self.get(key)
 
         # 冷却判定（含未过期冷却）
@@ -197,16 +215,9 @@ class SessionStore:
         - "none"：无状态。激活超过 state_duration 时在此结算为结束+冷却。
         """
         now = time.time() if now is None else now
-        s = self.sessions.get(key)
+        s = self.settle_expired(key, cfg, now=now)
         if s is None:
             return "none"
-
-        if s.active and not s.exit_ts and now - s.started_ts >= cfg.state_duration:
-            # 自然到期：结束并进入冷却
-            s.active = False
-            s.started_ts = 0.0
-            s.cooldown_end = now + max(0, int(cfg.cooldown_seconds))
-            self._changed()
 
         if s.active:
             if s.exit_ts > 0:
@@ -229,12 +240,9 @@ class SessionStore:
     def status_of(self, key: str, cfg, now: float | None = None) -> dict:
         """管理命令用：某会话的当前状态摘要。"""
         now = time.time() if now is None else now
-        s = self.sessions.get(key)
+        s = self.settle_expired(key, cfg, now=now)
         if s is None:
             return {"state": "无记录"}
-        if s.active and not s.exit_ts and now - s.started_ts >= cfg.state_duration:
-            self.prompt_state(key, cfg, now=now)
-            s = self.sessions.get(key, Session())
         if s.active:
             if s.exit_ts > 0:
                 return {"state": "待退出（下一次回复注入退出提示词）"}

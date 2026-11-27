@@ -21,6 +21,7 @@ import re
 import sys
 import time
 import tomllib
+import unicodedata
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -59,6 +60,15 @@ LIMIT = _store_mod.LIMIT
 BodyLink = _link_mod.BodyLink
 
 INTENSITY_MIN, INTENSITY_MAX = 0, 120  # 指令可设置的敏感度范围（越界直接拒绝）
+TIER_STEP = 20                        # 无斜杠升/降档步长
+_TIER_JUMP_SPECS: tuple[tuple[str, int], ...] = (
+    ("tier_jump_1_keywords", 10),
+    ("tier_jump_2_keywords", 30),
+    ("tier_jump_3_keywords", 50),
+    ("tier_jump_4_keywords", 70),
+    ("tier_jump_5_keywords", 90),
+    ("tier_jump_6_keywords", 110),
+)
 
 # A① 身体文案的触发阈值（读 get_state 字段；文案内容与开关在 [linkage] 配置）
 BODY_TIRED_BELOW = 30.0     # energy 低于该值 → 精力见底
@@ -129,6 +139,15 @@ _SECTION_WHITELISTS: dict[str, dict[str, tuple[str, Any, Any]]] = {
         "max_concurrent": ("int", 1, 9999),
         "exit_pending_ttl": ("int", 5, 3600),
         "react_on_trigger": ("bool", None, None),
+        "react_on_tier_change": ("bool", None, None),
+        "tier_up_keywords": ("list", None, None),
+        "tier_down_keywords": ("list", None, None),
+        "tier_jump_1_keywords": ("list", None, None),
+        "tier_jump_2_keywords": ("list", None, None),
+        "tier_jump_3_keywords": ("list", None, None),
+        "tier_jump_4_keywords": ("list", None, None),
+        "tier_jump_5_keywords": ("list", None, None),
+        "tier_jump_6_keywords": ("list", None, None),
         "proactive_threshold": ("int", 0, 120),
         "auto_speed_per_minute": ("int", 1, 120),
         "climax_threshold": ("int", 0, 120),
@@ -157,17 +176,23 @@ _STATE_FILE = "state.json"
 
 
 def _norm_text(raw: Any) -> str:
-    """关键词匹配用的消息文本归一化：去首尾空白与单个 / 前缀，转小写。"""
-    text = str(raw or "").strip().lower()
+    """关键词匹配用的消息文本归一化：NFC、去 Unicode 变体选择符、去首尾空白与单个 / 前缀、转小写。"""
+    text = unicodedata.normalize("NFC", str(raw or ""))
+    text = text.replace("\ufe0e", "").replace("\ufe0f", "").strip().lower()
     if text.startswith("/"):
         text = text[1:].strip()
     return text
 
 
+def _norm_keyword_set(raw_keywords: Any) -> set[str]:
+    """把配置里的关键词列表归一化为非空集合。"""
+    return {kw for kw in (_norm_text(w) for w in (raw_keywords or [])) if kw}
+
+
 def _norm_text_strip_at(raw: Any, keywords: Any = ()) -> str:
     """在归一化基础上剥掉"@昵称"前缀（@ 与昵称间、昵称与关键词间可能有空格）。
 
-    无空格形态（"@麦麦控制"）在文本上分不清昵称与关键词，只在 keywords 里有
+    无空格形态（"@麦麦控制" / "@麦麦🔥"）在文本上分不清昵称与关键词，只在 keywords 里有
     关键词正好收尾时才接受——部分适配器 @ 后不补空格，靠这条兜底。"""
     text = _norm_text(raw)
     if text.startswith("@"):
@@ -178,9 +203,8 @@ def _norm_text_strip_at(raw: Any, keywords: Any = ()) -> str:
             return ""
         if any(ch.isspace() for ch in tail):
             return tail.split(None, 1)[1].strip()
-        for kw in keywords:
-            kw = _norm_text(kw)
-            if kw and len(tail) > len(kw) and tail.endswith(kw):
+        for kw in sorted(_norm_keyword_set(keywords), key=len, reverse=True):
+            if len(tail) > len(kw) and tail.endswith(kw):
                 return kw
         return ""  # "@麦麦控制"且结尾对不上任何关键词，不匹配
     return text
@@ -994,6 +1018,24 @@ class ImmersiveControlPlugin(MaiBotPlugin):
             return text
         return ""
 
+    async def _dispatch_proactive(self, session_id: str, intent: str, *,
+                                  reason: str, source_kind: str) -> None:
+        """向宿主发起一次主动回复；能力未授权或失败时降级为上下文注入。"""
+        try:
+            await self.ctx.maisaka.proactive.trigger(
+                session_id, intent, reason=reason,
+            )
+            self.ctx.logger.info("会话 %s 已触发主动表达（%s）", session_id, reason)
+        except Exception as e:  # noqa: BLE001  能力未授权或触发失败：降级为注入上下文
+            self.ctx.logger.warning("主动表达触发失败（%s），降级为上下文注入", e)
+            try:
+                await self.ctx.maisaka.context.append(
+                    session_id, [{"type": "text", "content": intent}],
+                    visible_text="", source_kind=source_kind,
+                )
+            except Exception as e2:  # noqa: BLE001
+                self.ctx.logger.warning("上下文注入也失败: %s", e2)
+
     async def _maybe_proactive(self, session_id: str) -> bool:
         """敏感度达到阈值时自动触发一次主动表达（每次激活最多一次）。"""
         threshold = int(self._control().proactive_threshold)
@@ -1013,21 +1055,50 @@ class ImmersiveControlPlugin(MaiBotPlugin):
             p.item_name,
             self._effective_sensitivity(session_id),
         )
-        try:
-            await self.ctx.maisaka.proactive.trigger(
-                session_id, intent, reason="immersive-control 敏感度阈值",
-            )
-            self.ctx.logger.info("会话 %s 敏感度达阈值，已触发主动表达", session_id)
-        except Exception as e:  # noqa: BLE001  能力未授权或触发失败：降级为注入上下文
-            self.ctx.logger.warning("主动表达触发失败（%s），降级为上下文注入", e)
-            try:
-                await self.ctx.maisaka.context.append(
-                    session_id, [{"type": "text", "content": intent}],
-                    visible_text="", source_kind="plugin_immersive_threshold",
-                )
-            except Exception as e2:  # noqa: BLE001
-                self.ctx.logger.warning("上下文注入也失败: %s", e2)
+        await self._dispatch_proactive(
+            session_id, intent,
+            reason="immersive-control 敏感度阈值",
+            source_kind="plugin_immersive_threshold",
+        )
         return True
+
+    async def _set_manual_sensitivity(self, session_id: str, value: int, *,
+                                      receipt_text: str, boundary_text: str = "",
+                                      action_label: str = "调整") -> None:
+        """统一应用手动敏感度变更（/强度 与 升/降/直达关键词共用）。"""
+        cfg = self._control()
+        old_val = self._effective_sensitivity(session_id)
+        self._store.set_sensitivity(session_id, value)
+        new_val = self._effective_sensitivity(session_id)
+        changed = new_val != old_val
+        s = self._store.settle_expired(session_id, cfg)
+        is_active = bool(s is not None and s.active and s.exit_ts <= 0)
+
+        if changed and is_active and cfg.react_on_tier_change:
+            threshold = int(cfg.proactive_threshold)
+            if threshold > 0 and s is not None and not s.proactive_fired and new_val >= threshold:
+                s.proactive_fired = True
+                self._store._changed()
+            p = self.config.prompt
+            intent = render_template(
+                f"（你身上的{{item_name}}的强度刚刚从 {old_val}/120 被调到了 {{sensitivity}}/120，"
+                "体感立刻发生了变化，请立即做出自然的情绪与状态反应，不要直接复述数值。）",
+                p.item_name,
+                new_val,
+            )
+            await self._dispatch_proactive(
+                session_id, intent,
+                reason=f"immersive-control {action_label}",
+                source_kind="plugin_immersive_tier_change",
+            )
+            return
+
+        await self._feedback(
+            session_id,
+            receipt_text if changed else (boundary_text or receipt_text),
+        )
+        if is_active:
+            await self._maybe_proactive(session_id)
 
     # ---- 入站消息：关键词驱动状态机 ----
 
@@ -1054,9 +1125,15 @@ class ImmersiveControlPlugin(MaiBotPlugin):
         if not text:
             return None
 
-        enter_words = {_norm_text(w) for w in (cfg.enter_keywords or []) if str(w).strip()}
-        exit_words = {_norm_text(w) for w in (cfg.exit_keywords or []) if str(w).strip()}
-        words = enter_words | exit_words
+        enter_words = _norm_keyword_set(cfg.enter_keywords)
+        exit_words = _norm_keyword_set(cfg.exit_keywords)
+        up_words = _norm_keyword_set(cfg.tier_up_keywords)
+        down_words = _norm_keyword_set(cfg.tier_down_keywords)
+        jump_sets = [(val, _norm_keyword_set(getattr(cfg, attr, ())))
+                     for attr, val in _TIER_JUMP_SPECS]
+        words = set(enter_words) | exit_words | up_words | down_words
+        for _, jset in jump_sets:
+            words |= jset
 
         candidates = _keyword_candidates(raw_text, words)
         hit_words = candidates & words
@@ -1072,8 +1149,6 @@ class ImmersiveControlPlugin(MaiBotPlugin):
 
         if not hit_words:
             return None  # 非关键词消息完全旁路，零开销
-        hit_enter = bool(hit_words & enter_words)
-        hit_exit = bool(hit_words & exit_words)
 
         user_id = _extract(message, "message_info", "user_info", "user_id")
         session_id = str(message.get("session_id") or "")
@@ -1084,12 +1159,21 @@ class ImmersiveControlPlugin(MaiBotPlugin):
         if cfg.admin_only_mode and not self._is_admin(user_id):
             return None
 
-        if hit_enter:
+        s = self._store.settle_expired(session_id, cfg)
+        is_active = bool(s is not None and s.active and s.exit_ts <= 0)
+        is_exiting = bool(s is not None and s.active and s.exit_ts > 0)
+
+        if is_exiting:
+            return None  # 待退出态不再重开、调档或重复退出
+
+        if not is_active:
+            if not (hit_words & enter_words):
+                return None  # 未激活/冷却中：升/降/直达与退出关键词全部放行
             result, remaining = self._store.try_activate(session_id, cfg)
             if result == ACTIVATED:
                 # WebUI 展示用：记录会话真名（群名 / 用户昵称·名片）
                 self._capture_display_name(session_id, message)
-                # B：首次激活写压力（重入刷新不写；联动关闭时零路径）
+                # B：首次激活写压力（联动关闭时零路径）
                 await self._body_guard(lambda: self._body_on_activated(session_id))
                 await self._maybe_proactive(session_id)
                 if cfg.react_on_trigger:
@@ -1108,11 +1192,44 @@ class ImmersiveControlPlugin(MaiBotPlugin):
                 return {"action": "abort", "abort_message": "并发上限"}
             return None
 
-        # 退出关键词
-        if hit_exit and self._store.try_exit(session_id):
-            # 静默结束；退出模板由 replyer 钩子在下次回复时注入一次
-            return {"action": "abort", "abort_message": "沉浸式遥控已退出"}
-        return None  # 没有激活会话时，「停止」等词按普通聊天放行
+        # 激活中：优先级 退出 > 直达 1~6 档 > 降档 > 升档（留空则复用进入关键词）
+        if hit_words & exit_words:
+            if self._store.try_exit(session_id):
+                return {"action": "abort", "abort_message": "沉浸式遥控已退出"}
+            return None
+
+        for target_val, jset in jump_sets:
+            if hit_words & jset:
+                await self._set_manual_sensitivity(
+                    session_id, target_val,
+                    receipt_text=f"敏感度已切至 {target_val}/120。\n档位：{self._tier_text(target_val)}",
+                    boundary_text=f"当前已处于该档位（{target_val}/120）。\n档位：{self._tier_text(target_val)}",
+                    action_label="直达档位",
+                )
+                return {"action": "abort", "abort_message": f"沉浸式遥控已切至 {target_val}/120"}
+
+        if hit_words & down_words:
+            new_val = max(INTENSITY_MIN, self._effective_sensitivity(session_id) - TIER_STEP)
+            await self._set_manual_sensitivity(
+                session_id, new_val,
+                receipt_text=f"敏感度已降至 {new_val}/120。\n档位：{self._tier_text(new_val)}",
+                boundary_text=f"当前已处于最低强度（{INTENSITY_MIN}/120）。\n档位：{self._tier_text(new_val)}",
+                action_label="降档",
+            )
+            return {"action": "abort", "abort_message": f"沉浸式遥控已降档至 {new_val}/120"}
+
+        effective_up_words = up_words if up_words else enter_words
+        if hit_words & effective_up_words:
+            new_val = min(INTENSITY_MAX, self._effective_sensitivity(session_id) + TIER_STEP)
+            await self._set_manual_sensitivity(
+                session_id, new_val,
+                receipt_text=f"敏感度已升至 {new_val}/120。\n档位：{self._tier_text(new_val)}",
+                boundary_text=f"当前已处于最高强度（{INTENSITY_MAX}/120）。\n档位：{self._tier_text(new_val)}",
+                action_label="升档",
+            )
+            return {"action": "abort", "abort_message": f"沉浸式遥控已升档至 {new_val}/120"}
+
+        return None  # 已配置独立升档关键词时，进入关键词在激活态不再生效
 
     # ---- LLM 回复前：注入状态提示词 ----
 
@@ -1293,15 +1410,12 @@ class ImmersiveControlPlugin(MaiBotPlugin):
         return await self._apply_intensity(stream_id, value)
 
     async def _apply_intensity(self, stream_id: str, value: int) -> tuple[bool, str | None, bool]:
-        """应用会话级敏感度覆盖并回执（含越过阈值时的即时触发）。"""
-        self._store.set_sensitivity(stream_id, value)
-        await self._feedback(
-            stream_id,
-            f"本会话敏感度已设为 {value}/120。\n档位：{self._tier_text(value)}",
+        """应用会话级敏感度覆盖并回执（含越过阈值或主动回复开关触发）。"""
+        await self._set_manual_sensitivity(
+            stream_id, value,
+            receipt_text=f"本会话敏感度已设为 {value}/120。\n档位：{self._tier_text(value)}",
+            action_label="指令调档",
         )
-        s = self._store.sessions.get(stream_id)
-        if s is not None and s.active:
-            await self._maybe_proactive(stream_id)
         return True, "imm_intensity", True
 
 
@@ -1315,11 +1429,14 @@ class ImmersiveControlPlugin(MaiBotPlugin):
             return False, "权限不足", True
         cfg = self._control()
         p = self.config.prompt
+        up_desc = "、".join(cfg.tier_up_keywords) if cfg.tier_up_keywords else "（留空，激活态复用进入关键词）"
+        down_desc = "、".join(cfg.tier_down_keywords) if cfg.tier_down_keywords else "（未配置）"
         await self._send(
             stream_id,
             "\n".join([
                 f"进入关键词：{'、'.join(cfg.enter_keywords)}",
                 f"退出关键词：{'、'.join(cfg.exit_keywords)}",
+                f"升档关键词：{up_desc}；降档关键词：{down_desc}",
                 f"玩具：{p.item_name}（全局敏感度 {p.sensitivity}/120，"
                 f"本会话 {self._effective_sensitivity(stream_id)}/100，可用 /强度 修改）",
                 f"持续 {cfg.state_duration} 秒，冷却 {cfg.cooldown_seconds} 秒，"
@@ -1327,7 +1444,8 @@ class ImmersiveControlPlugin(MaiBotPlugin):
                 f"阈值自动触发：{'关闭' if cfg.proactive_threshold <= 0 else f'{cfg.proactive_threshold}/100'}",
                 f"仅管理员可触发：{'是' if cfg.admin_only_mode else '否'}"
                 f"（管理员 {len(cfg.admin_ids or [])} 人）",
-                f"触发瞬间立刻反应：{'是' if cfg.react_on_trigger else '否（原版静默语义）'}",
+                f"触发瞬间立刻反应：{'是' if cfg.react_on_trigger else '否（原版静默语义）'}；"
+                f"调档触发主动回复：{'是' if cfg.react_on_tier_change else '否'}",
                 f"配置版本：{SUPPORTED_CONFIG_VERSION}（在 WebUI 修改即热更新，无需重载）",
             ]),
         )

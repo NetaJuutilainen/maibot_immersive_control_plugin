@@ -10,7 +10,7 @@ from typing import Any
 
 from maibot_sdk import Field, PluginConfigBase
 
-SUPPORTED_CONFIG_VERSION = "1.2.2"
+SUPPORTED_CONFIG_VERSION = "1.2.3"
 
 # 提示词模板中的占位符（用 replace 而非 str.format，模板中出现裸花括号也不会炸）
 PLACEHOLDER_ITEM = "{item_name}"
@@ -104,6 +104,51 @@ class ControlSectionConfig(PluginConfigBase):
         "触发瞬间是否让麦麦立刻做出反应（默认与原版一致：静默激活，靠后续回复体现状态）",
         default=False,
     )
+    react_on_tier_change: bool = _ui_field(
+        "调档立即触发主动回复",
+        "开启后，手动加减档、直达档位或 /强度 改变数值时，直接向宿主发起一次 LLM 主动回复（不发固定短句回执）",
+        default=False,
+    )
+    tier_up_keywords: list[str] = _ui_field(
+        "升档关键词",
+        "激活期间命中后有效敏感度 +20（留空则激活期间自动复用进入关键词，支持 Unicode Emoji）",
+        default=[],
+    )
+    tier_down_keywords: list[str] = _ui_field(
+        "降档关键词",
+        "激活期间命中后有效敏感度 -20（留空不启用，支持 Unicode Emoji）",
+        default=[],
+    )
+    tier_jump_1_keywords: list[str] = _ui_field(
+        "直达 1 档关键词",
+        "激活期间命中后直达 10/120（0-20 档；留空不启用，支持 Unicode Emoji）",
+        default=[],
+    )
+    tier_jump_2_keywords: list[str] = _ui_field(
+        "直达 2 档关键词",
+        "激活期间命中后直达 30/120（20-40 档；留空不启用，支持 Unicode Emoji）",
+        default=[],
+    )
+    tier_jump_3_keywords: list[str] = _ui_field(
+        "直达 3 档关键词",
+        "激活期间命中后直达 50/120（40-60 档；留空不启用，支持 Unicode Emoji）",
+        default=[],
+    )
+    tier_jump_4_keywords: list[str] = _ui_field(
+        "直达 4 档关键词",
+        "激活期间命中后直达 70/120（60-80 档；留空不启用，支持 Unicode Emoji）",
+        default=[],
+    )
+    tier_jump_5_keywords: list[str] = _ui_field(
+        "直达 5 档关键词",
+        "激活期间命中后直达 90/120（80-100 档；留空不启用，支持 Unicode Emoji）",
+        default=[],
+    )
+    tier_jump_6_keywords: list[str] = _ui_field(
+        "直达 6 档关键词",
+        "激活期间命中后直达 110/120（100-120 档；留空不启用，支持 Unicode Emoji）",
+        default=[],
+    )
     proactive_threshold: int = _ui_field(
         "主动表达阈值",
         "敏感度自动触发阈值（0=关闭）：会话敏感度达到该值时，麦麦自动主动表达一次",
@@ -137,7 +182,33 @@ class ControlSectionConfig(PluginConfigBase):
     stealth_phrases: list[str] = _ui_field(
         "隐蔽语句池",
         "隐蔽模式下随机发送的日常语句池（群聊里别人看不出任何含义）",
-        default=["好。", "嗯，知道了。", "哦哦，这样。", "行吧。", "……好吧。", "嗯？", "收到收到"],
+        default=[
+            "好。",
+            "嗯，知道了。",
+            "哦哦，这样。",
+            "行吧。",
+            "……好吧。",
+            "嗯？",
+            "收到收到",
+            "嗯嗯。",
+            "好哦。",
+            "知道啦。",
+            "行，我看着办。",
+            "唔，懂了。",
+            "啊？好吧。",
+            "没问题~",
+            "好呀。",
+            "嗯哼？",
+            "哦，行。",
+            "那就这样吧。",
+            "明白~",
+            "好好好。",
+            "嘶……行吧。",
+            "嗯，听你的。",
+            "行行行，知道了。",
+            "唔……好。",
+            "收到~",
+        ],
     )
 
 
