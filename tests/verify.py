@@ -21,6 +21,7 @@ import re
 import sys
 import tempfile
 import time
+import tomllib
 import traceback
 from pathlib import Path
 
@@ -1357,6 +1358,95 @@ async def main() -> None:
               set(snap) == {"linkage", "control", "prompt"}
               and snap["control"].get("state_duration") == 600
               and snap["prompt"].get("item_name") == "小项链", str(list(snap)))
+
+        # 9.13a WebUI 多行 TOML 数组/多行字符串写回回归 + linkage.html 字段白名单全覆盖
+        p_ml = make_plugin(tmp)
+        ml_file = tmp / "config_multiline.toml"
+        ml_file.write_text(
+            '[plugin]\nenabled = true\nconfig_version = "1.2.2"\n\n'
+            "[control]\n"
+            "require_at = true\n"
+            'enter_keywords = [\n'
+            '    "控制",\n'
+            '    "遥控",\n'
+            '    "我要控制你了",\n'
+            '    "td",\n'
+            "]\n"
+            'exit_keywords = [\n'
+            '    "停止",\n'
+            '    "停止控制",\n'
+            '    "结束",\n'
+            '    "结束控制",\n'
+            "]\n"
+            "state_duration = 180\n"
+            "stealth_mode = false\n"
+            'stealth_phrases = [\n'
+            '    "好。",\n'
+            '    "嗯，知道了。",\n'
+            '    "[伪段头] # 含括号与井号",\n'
+            '    "收到收到",\n'
+            "]\n"
+            "# 保留的用户注释\n\n"
+            "[prompt]\n"
+            'item_name = "特殊装置"\n'
+            'enter_template = """\n'
+            "第一行\n"
+            "[control]\n"
+            '第三行 "带引号"\n'
+            '"""\n\n'
+            "[linkage]\n"
+            "enabled = false\n",
+            encoding="utf-8",
+        )
+        p_ml._cfg_path = ml_file
+        r_ml = await p_ml.webui_linkage_config(patch=json.dumps({
+            "control.state_duration": 360,
+            "control.enter_keywords": "控制\n遥控\ntd",
+            "control.exit_keywords": "停止\n结束",
+            "control.stealth_phrases": ["好。", "嗯，知道了。", "收到收到"],
+            "prompt.enter_template": "新模板第一行\n新模板第二行\t制表",
+            "linkage.body_excited_text": "心跳好快",
+            "linkage.body_irritable_text": "有点烦躁",
+        }))
+        check("多行 TOML 写回：无 rejected 且全部应用",
+              r_ml.get("ok") and not r_ml.get("rejected")
+              and r_ml["applied"].get("linkage.body_excited_text") == "心跳好快"
+              and r_ml["applied"].get("linkage.body_irritable_text") == "有点烦躁", str(r_ml))
+        ml_saved = ml_file.read_text(encoding="utf-8")
+        ml_parsed = tomllib.loads(ml_saved)
+        check("多行 TOML 写回：tomllib 解析成功且多行数组/多行字符串无残余行",
+              ml_parsed["control"]["state_duration"] == 360
+              and ml_parsed["control"]["enter_keywords"] == ["控制", "遥控", "td"]
+              and ml_parsed["control"]["exit_keywords"] == ["停止", "结束"]
+              and ml_parsed["control"]["stealth_phrases"] == ["好。", "嗯，知道了。", "收到收到"]
+              and ml_parsed["prompt"]["enter_template"] == "新模板第一行\n新模板第二行\t制表"
+              and ml_parsed["linkage"]["body_excited_text"] == "心跳好快"
+              and ml_parsed["linkage"]["body_irritable_text"] == "有点烦躁"
+              and "# 保留的用户注释" in ml_saved, ml_saved)
+
+        # linkage.html GROUPS 全部字段与服务端白名单对齐（防前后端漂移）
+        html_src = (PLUGIN_DIR / "webui" / "linkage.html").read_text(encoding="utf-8")
+        ui_pairs = re.findall(r'sec:\s*"([^"]+)"\s*,\s*k:\s*"([^"]+)"', html_src)
+        ui_patch = {}
+        for sec, key in ui_pairs:
+            sample = p_ml._config_snapshot()[sec][key]
+            ui_patch[f"{sec}.{key}"] = "\n".join(sample) if isinstance(sample, list) else sample
+        r_ui_all = await p_ml.webui_linkage_config(patch=json.dumps(ui_patch))
+        ml_parsed_all = tomllib.loads(ml_file.read_text(encoding="utf-8"))
+        check("linkage.html 全字段写回：零 rejected 且结果 TOML 可解析",
+              r_ui_all.get("ok") and not r_ui_all.get("rejected")
+              and len(r_ui_all.get("applied") or {}) == len(ui_pairs)
+              and ml_parsed_all["control"]["enter_keywords"] == p_ml.config.control.enter_keywords,
+              str(r_ui_all.get("rejected")))
+
+        # 破坏性兜底：若目标文件本身已损坏，拒绝覆盖（不破坏已有内容）
+        bad_file = tmp / "broken.toml"
+        bad_raw = '[control]\nbad_line_without_eq\nstate_duration = 180\n'
+        bad_file.write_text(bad_raw, encoding="utf-8")
+        p_ml._cfg_path = bad_file
+        await p_ml.webui_linkage_config(patch=json.dumps({"control.state_duration": 240}))
+        check("损坏 TOML 保护：校验失败时不覆盖磁盘文件",
+              bad_file.read_text(encoding="utf-8") == bad_raw)
 
         # 9.13b 重载恢复 + tick 以 store 为准 + 冷却守卫
         p_rs = make_plugin(tmp)

@@ -1,5 +1,14 @@
 # 更新日志
 
+## v1.2.2（2026-11-27）
+
+- **修复：WebUI「麦麦遥控器」保存配置时写坏多行 `config.toml` 数组，导致后续重载报错。**
+  - 宿主在切换插件开关或通过内置设置页保存时，会把多元素数组写为多行 TOML 格式（`key = [\n    "...",\n]`）；
+  - 此前 `_write_config_section` 仅单行替换 `key = [`，将剩余元素行与 `]` 遗留在下方，触发 `Expected '=' after a key in a key/value pair`；
+  - 现改为基于 TOML 词法状态的整块替换（正确处理多行数组、多行 `"""`/`'''` 字符串、注释、引号内 `[` 与控制字符转义），并在落盘前通过 `tomllib.loads` 校验合法性（校验失败则拒绝写入保护原文件）。
+- **修复：WebUI「麦麦遥控器」保存时 `body_excited_text` / `body_irritable_text` 被白名单拒绝。**
+  - 为 `_LINKAGE_WHITELIST` 补齐 v1.2.0 新增的 `body_excited_text` 与 `body_irritable_text`，并新增回归测试校验 `linkage.html` 表单字段与白名单完全对齐。
+
 ## v1.2.1（2026-11-24）
 
 - **修复：部分适配器下「群里 @ 麦麦 + 关键词」完全不触发（私聊正常）。**

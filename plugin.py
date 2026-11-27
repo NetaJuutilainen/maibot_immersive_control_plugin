@@ -20,6 +20,7 @@ import random
 import re
 import sys
 import time
+import tomllib
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -112,6 +113,8 @@ _LINKAGE_WHITELIST: dict[str, tuple[str, Any, Any]] = {
     "cooldown_floor": ("float", 0.0, 100.0),
     "body_wake_note_text": ("str", None, None),
     "body_wake_note_light_text": ("str", None, None),
+    "body_excited_text": ("str", None, None),
+    "body_irritable_text": ("str", None, None),
 }
 
 # 插件本体（非联动）的可快捷配置字段：control 段与 prompt 段
@@ -248,6 +251,254 @@ def _has_at(message: dict) -> bool:
 def _is_group_message(message: dict) -> bool:
     info = message.get("message_info") or {}
     return bool((info.get("group_info") or {}).get("group_id"))
+
+
+def _advance_toml_state(fragment: str, multiline_quote: str | None,
+                        bracket_depth: int) -> tuple[str | None, int]:
+    """沿单行片段推进 TOML 词法状态（多行字符串、单行字符串、注释与 []/{} 深度）。"""
+    i = 0
+    n = len(fragment)
+    while i < n:
+        if multiline_quote is not None:
+            if multiline_quote == '"""':
+                if fragment[i] == "\\":
+                    i += 2
+                    continue
+                if fragment.startswith('"""', i):
+                    j = i
+                    while j < n and fragment[j] == '"' and (j - i) < 5:
+                        j += 1
+                    multiline_quote = None
+                    i = j
+                    continue
+            elif fragment.startswith("'''", i):
+                j = i
+                while j < n and fragment[j] == "'" and (j - i) < 5:
+                    j += 1
+                multiline_quote = None
+                i = j
+                continue
+            i += 1
+            continue
+
+        ch = fragment[i]
+        if ch == "#":
+            break
+        if fragment.startswith('"""', i):
+            multiline_quote = '"""'
+            i += 3
+            continue
+        if fragment.startswith("'''", i):
+            multiline_quote = "'''"
+            i += 3
+            continue
+        if ch == '"':
+            i += 1
+            while i < n:
+                if fragment[i] == "\\":
+                    i += 2
+                elif fragment[i] == '"':
+                    i += 1
+                    break
+                else:
+                    i += 1
+            continue
+        if ch == "'":
+            i += 1
+            while i < n and fragment[i] != "'":
+                i += 1
+            i += 1
+            continue
+        if ch in ("[", "{"):
+            bracket_depth += 1
+        elif ch in ("]", "}"):
+            bracket_depth = max(0, bracket_depth - 1)
+        i += 1
+    return multiline_quote, bracket_depth
+
+
+def _find_top_level_eq(line: str) -> int:
+    """在 TOML 赋值行中定位键值分隔 `=`（忽略引号内与注释后的 `=`）；未找到返回 -1。"""
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if ch == "#":
+            return -1
+        if ch == "=":
+            return i
+        if ch == '"':
+            i += 1
+            while i < n:
+                if line[i] == "\\":
+                    i += 2
+                elif line[i] == '"':
+                    i += 1
+                    break
+                else:
+                    i += 1
+            continue
+        if ch == "'":
+            i += 1
+            while i < n and line[i] != "'":
+                i += 1
+            i += 1
+            continue
+        i += 1
+    return -1
+
+
+def _extract_simple_key(line: str, eq_pos: int) -> str | None:
+    """提取简单键名（裸键或单引号/双引号包裹）；点号复合键返回 None。"""
+    raw = line[:eq_pos].strip()
+    if not raw:
+        return None
+    if len(raw) >= 2 and raw[0] in ('"', "'") and raw[-1] == raw[0]:
+        raw = raw[1:-1]
+    return raw if re.fullmatch(r"[A-Za-z0-9_-]+", raw) else None
+
+
+def _parse_toml_section_header(stripped: str) -> str:
+    """解析顶层 `[section]` 头名（允许尾随注释）；`[[...]]` 或非简单表头返回空串。"""
+    if stripped.startswith("[["):
+        return ""
+    i = 1
+    n = len(stripped)
+    while i < n:
+        ch = stripped[i]
+        if ch == '"':
+            i += 1
+            while i < n:
+                if stripped[i] == "\\":
+                    i += 2
+                elif stripped[i] == '"':
+                    i += 1
+                    break
+                else:
+                    i += 1
+            continue
+        if ch == "'":
+            i += 1
+            while i < n and stripped[i] != "'":
+                i += 1
+            i += 1
+            continue
+        if ch == "]":
+            tail = stripped[i + 1:].lstrip()
+            if tail and not tail.startswith("#"):
+                return ""
+            inner = stripped[1:i].strip()
+            if len(inner) >= 2 and inner[0] in ('"', "'") and inner[-1] == inner[0]:
+                inner = inner[1:-1]
+            return inner
+        i += 1
+    return ""
+
+
+def _escape_toml_str(text: str) -> str:
+    """转义为合法的单行 TOML 基本字符串。"""
+    out: list[str] = []
+    for ch in text:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\b":
+            out.append("\\b")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\f":
+            out.append("\\f")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
+def _format_toml_value(val: Any) -> str:
+    """把配置值格式化为单行 TOML 字面量。"""
+    if isinstance(val, bool):
+        return "true" if val else "false"
+    if isinstance(val, (list, tuple)):
+        return "[" + ", ".join(_escape_toml_str(str(x)) for x in val) + "]"
+    if isinstance(val, str):
+        return _escape_toml_str(val)
+    return str(val)
+
+
+def _update_toml_section_lines(lines: list[str], section: str,
+                               applied: dict[str, Any]) -> list[str]:
+    """更新或补建指定 `[section]` 的键值对，完整替换多行数组/多行字符串语句块。"""
+    if not applied:
+        return list(lines)
+
+    in_target = False
+    sec_start: int | None = None
+    sec_end = len(lines)
+    spans: dict[str, tuple[int, int]] = {}
+    idx = 0
+    while idx < len(lines):
+        stripped = lines[idx].lstrip()
+        if not stripped or stripped.startswith("#"):
+            idx += 1
+            continue
+        if stripped.startswith("["):
+            if in_target:
+                sec_end = idx
+                break
+            if _parse_toml_section_header(stripped) == section:
+                in_target = True
+                sec_start = idx
+            idx += 1
+            continue
+        eq_pos = _find_top_level_eq(lines[idx])
+        key = _extract_simple_key(lines[idx], eq_pos) if eq_pos >= 0 else None
+        val_frag = lines[idx][eq_pos + 1:] if eq_pos >= 0 else lines[idx]
+        mq, depth = _advance_toml_state(val_frag, None, 0)
+        stmt_end = idx
+        while (mq is not None or depth > 0) and stmt_end + 1 < len(lines):
+            stmt_end += 1
+            mq, depth = _advance_toml_state(lines[stmt_end], mq, depth)
+        if in_target and key is not None:
+            spans[key] = (idx, stmt_end)
+        idx = stmt_end + 1
+
+    if sec_start is None:
+        out = list(lines)
+        if out and out[-1].strip():
+            out.append("")
+        out.append(f"[{section}]")
+        for key, val in applied.items():
+            out.append(f"{key} = {_format_toml_value(val)}")
+        return out
+
+    insert_end = sec_end
+    while insert_end > sec_start + 1 and not lines[insert_end - 1].strip():
+        insert_end -= 1
+
+    by_start = {st: (k, en) for k, (st, en) in spans.items() if k in applied}
+    out = list(lines[:sec_start + 1])
+    written: set[str] = set()
+    pos = sec_start + 1
+    while pos < insert_end:
+        if pos in by_start:
+            key, en = by_start[pos]
+            out.append(f"{key} = {_format_toml_value(applied[key])}")
+            written.add(key)
+            pos = en + 1
+        else:
+            out.append(lines[pos])
+            pos += 1
+    for key, val in applied.items():
+        if key not in written:
+            out.append(f"{key} = {_format_toml_value(val)}")
+    out.extend(lines[insert_end:])
+    return out
 
 
 def _extract(message: dict, *path: str) -> str:
@@ -1229,50 +1480,36 @@ class ImmersiveControlPlugin(MaiBotPlugin):
                 continue
             applied[key] = val
             by_section.setdefault(section, {})[name] = val
-        for section, values in by_section.items():
-            self._write_config_section(section, values)
+        self._write_config_sections(by_section)
         return applied, rejected
 
-    def _write_config_section(self, section: str, applied: dict) -> None:
-        """把已应用的键写回 config.toml 的指定段（只改该段，其余原样保留）。"""
+    def _write_config_sections(self, by_section: dict[str, dict[str, Any]]) -> None:
+        """把多段已应用的键一次性写回 config.toml（完整替换多行值并在落盘前做 TOML 校验）。"""
+        if not by_section:
+            return
         path = self._config_path()
         try:
-            text = path.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8-sig")
         except Exception as exc:  # noqa: BLE001
             self.ctx.logger.warning("读取 config.toml 失败（配置仅内存生效）：%r", exc)
             return
         lines = text.splitlines()
-        header = f"[{section}]"
-        start = next((i for i, ln in enumerate(lines) if ln.strip() == header), None)
-        if start is None:
-            lines.extend(["", header])
-            start = len(lines) - 1
-        end = next((i for i in range(start + 1, len(lines))
-                    if lines[i].lstrip().startswith("[")), len(lines))
-
-        def fmt(v: Any) -> str:
-            if isinstance(v, bool):
-                return "true" if v else "false"
-            if isinstance(v, (list, tuple)):
-                inner = ", ".join('"' + str(x).replace('"', '\\"') + '"' for x in v)
-                return f"[{inner}]"
-            if isinstance(v, str):
-                return '"' + v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
-            return str(v)
-
-        for key, val in applied.items():
-            new_line = f"{key} = {fmt(val)}"
-            for i in range(start + 1, end):
-                if lines[i].split("=", 1)[0].strip() == key:
-                    lines[i] = new_line
-                    break
-            else:
-                lines.insert(end, new_line)
-                end += 1
+        for section, values in by_section.items():
+            lines = _update_toml_section_lines(lines, section, values)
+        new_text = "\n".join(lines) + "\n"
         try:
-            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            tomllib.loads(new_text)
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.logger.warning("写回 config.toml 前校验失败，已放弃写入：%r", exc)
+            return
+        try:
+            path.write_text(new_text, encoding="utf-8")
         except Exception as exc:  # noqa: BLE001
             self.ctx.logger.warning("写回 config.toml 失败（配置仅内存生效）：%r", exc)
+
+    def _write_config_section(self, section: str, applied: dict) -> None:
+        """把已应用的键写回 config.toml 的指定段（只改该段，其余原样保留）。"""
+        self._write_config_sections({section: applied})
 
     @API(name="webui_linkage_config",
          description="联动配置补丁（白名单键）：内存立即生效并写回 config.toml，供 WebUI 快捷配置区使用",
